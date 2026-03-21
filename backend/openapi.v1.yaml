@@ -1,0 +1,233 @@
+openapi: 3.1.0
+info:
+  title: Houji Phase 1 API
+  version: 1.0.0-draft
+  description: |
+    Frozen V1 API draft.
+    Backend is the single source of truth for runtime, billing, concurrency, and safety decisions.
+    Frontends must not derive rules locally.
+    AI endpoints are limited to query, handoff, and work-order submission only.
+servers:
+  - url: http://127.0.0.1:3000/api/v1
+paths:
+  /health: { get: { summary: Health check, tags: [health], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/HealthEnvelope' } } } } } } }
+  /auth/login: { post: { summary: Login, tags: [auth], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/LoginRequest' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /auth/logout: { post: { summary: Logout, tags: [auth], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /auth/me: { get: { summary: Current user, tags: [auth], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /auth/menus: { get: { summary: Current menu tree, tags: [auth], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /system/users:
+    get: { summary: User list, tags: [iam], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create user, tags: [iam], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UserUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /system/users/{id}:
+    patch: { summary: Update user, tags: [iam], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UserUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /system/users/{id}/roles:
+    post: { summary: Assign roles, tags: [iam], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { type: object, properties: { roleIds: { type: array, items: { type: string } } } } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /system/roles: { get: { summary: Role list, tags: [iam], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /system/permissions: { get: { summary: Permission list, tags: [iam], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /regions/tree: { get: { summary: Region tree, tags: [region], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /regions:
+    get: { summary: Region list, tags: [region], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create region, tags: [region], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegionUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /regions/{id}: { patch: { summary: Update region, tags: [region], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/RegionUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /device-types:
+    get: { summary: Device-type list, tags: [device-type], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create device type, tags: [device-type], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceTypeUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /device-types/{id}: { patch: { summary: Update device type, tags: [device-type], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceTypeUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /devices:
+    get: { summary: Device list, tags: [device-ledger], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create device, tags: [device-ledger], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /devices/{id}:
+    get: { summary: Device detail, tags: [device-ledger], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+    patch: { summary: Update device, tags: [device-ledger], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /devices/{id}/telemetry: { get: { summary: Device telemetry, tags: [device-ledger], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /wells:
+    get: { summary: Well list, tags: [irrigation-assets], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create well, tags: [irrigation-assets], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WellUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /wells/{id}:
+    get: { summary: Well detail, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+    patch: { summary: Update well, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WellUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /pumps:
+    get: { summary: Pump list, tags: [irrigation-assets], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create pump, tags: [irrigation-assets], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PumpUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /pumps/{id}:
+    get: { summary: Pump detail, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+    patch: { summary: Update pump, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PumpUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /valves:
+    get: { summary: Valve list, tags: [irrigation-assets], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create valve, tags: [irrigation-assets], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ValveUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /valves/{id}:
+    get: { summary: Valve detail, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+    patch: { summary: Update valve, tags: [irrigation-assets], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/ValveUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /billing-packages:
+    get: { summary: Billing package list, tags: [billing], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create billing package, tags: [billing], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BillingPackageUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /billing-packages/{id}: { patch: { summary: Update billing package, tags: [billing], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/BillingPackageUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /well-runtime-policies:
+    get: { summary: Well runtime policy list, tags: [policy], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create well runtime policy, tags: [policy], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WellRuntimePolicyUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /well-runtime-policies/{id}:
+    patch: { summary: Update well runtime policy, tags: [policy], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WellRuntimePolicyUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /well-runtime-policies/{id}/effective-preview: { get: { summary: Effective policy preview, tags: [policy], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /pump-valve-relations:
+    get: { summary: Pump-valve relation list, tags: [topology], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create pump-valve relation, tags: [topology], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PumpValveRelationUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /pump-valve-relations/{id}: { patch: { summary: Update pump-valve relation, tags: [topology], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/PumpValveRelationUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /u/runtime/start-check:
+    post:
+      summary: Runtime start check
+      tags: [runtime]
+      description: Backend-only decision endpoint. Frontends must use returned result, blockingReasons, availableActions, and pricePreview directly.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/RuntimeStartCheckRequest' }
+      responses:
+        '200': { description: Runtime decision, content: { application/json: { schema: { $ref: '#/components/schemas/RuntimeDecisionEnvelope' } } } }
+  /u/runtime/sessions:
+    post:
+      summary: Create runtime session
+      tags: [runtime]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/CreateRuntimeSessionRequest' }
+      responses:
+        '200': { description: Session created, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } }
+  /u/runtime/sessions/{id}/stop:
+    post:
+      summary: Stop runtime session
+      tags: [runtime]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: Session stopping, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } }
+  /orders: { get: { summary: Order list, tags: [order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /orders/{id}:
+    get: { summary: Order detail, tags: [order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /orders/{id}/pricing: { get: { summary: Order pricing detail, tags: [order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /orders/{id}/review: { post: { summary: Review exceptional order, tags: [order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /u/orders: { get: { summary: End-user order list, tags: [order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /alarms: { get: { summary: Alarm list, tags: [alarm], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /alarms/{id}:
+    get: { summary: Alarm detail, tags: [alarm], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /alarms/{id}/acknowledge: { post: { summary: Acknowledge alarm, tags: [alarm], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /alarms/{id}/resolve: { post: { summary: Resolve alarm, tags: [alarm], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /work-orders:
+    get: { summary: Work-order list, tags: [work-order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create work order, tags: [work-order], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/WorkOrderCreate' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /work-orders/{id}: { get: { summary: Work-order detail, tags: [work-order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /work-orders/{id}/assign: { post: { summary: Assign work order, tags: [work-order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /work-orders/{id}/accept: { post: { summary: Accept work order, tags: [work-order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /work-orders/{id}/process: { post: { summary: Submit work-order process, tags: [work-order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /m/my/todos: { get: { summary: My todo list, tags: [work-order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /m/my/work-orders: { get: { summary: My work-order list, tags: [work-order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /uat/cases:
+    get: { summary: UAT case list, tags: [uat], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post: { summary: Create UAT case, tags: [uat], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UatCaseCreate' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /uat/executions: { get: { summary: UAT execution list, tags: [uat], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /uat/executions/{id}/pass: { post: { summary: Mark UAT passed, tags: [uat], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /uat/executions/{id}/block: { post: { summary: Mark UAT blocked, tags: [uat], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /u/ai/conversations:
+    post: { summary: Create or resume AI conversation, tags: [ai-conversation], requestBody: { content: { application/json: { schema: { $ref: '#/components/schemas/CreateConversationRequest' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /u/ai/conversations/{id}:
+    get: { summary: AI conversation detail, tags: [ai-conversation], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
+  /u/ai/conversations/{id}/messages:
+    get: { summary: AI conversation messages, tags: [ai-conversation], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    post:
+      summary: Send AI query message
+      tags: [ai-conversation]
+      description: Query only. No device control is allowed from AI.
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/SendMessageRequest' } } } }
+      responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/AiReplyEnvelope' } } } } }
+  /u/ai/conversations/{id}/handoff: { post: { summary: AI handoff to manual service or work-order flow, tags: [ai-conversation], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/HandoffRequest' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /u/ai/conversations/{id}/work-orders: { post: { summary: Submit work order from AI flow, tags: [ai-conversation], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/AiWorkOrderRequest' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
+  /u/help/faqs: { get: { summary: FAQ list, tags: [ai-conversation], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+components:
+  parameters:
+    Id: { name: id, in: path, required: true, schema: { type: string } }
+  schemas:
+    EnvelopeBase:
+      type: object
+      required: [requestId, code, message, data]
+      properties:
+        requestId: { type: string }
+        code: { type: string }
+        message: { type: string }
+    GenericEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data: { type: object, additionalProperties: true }
+    ListEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items: { type: object, additionalProperties: true }
+    HealthEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                status: { type: string }
+                service: { type: string }
+                phase: { type: string }
+                timestamp: { type: string, format: date-time }
+    RuntimeDecisionEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                decisionId: { type: string }
+                result: { type: string, enum: [allow, deny, manual_review] }
+                blockingReasons: { type: array, items: { type: object, additionalProperties: true } }
+                availableActions: { type: array, items: { type: object, additionalProperties: true } }
+                effectiveRuleSource: { type: object, additionalProperties: true }
+                pricePreview: { type: object, additionalProperties: true }
+    AiReplyEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                conversationId: { type: string }
+                replyMode: { type: string }
+                replyText: { type: string }
+                toolCalls: { type: array, items: { type: object, additionalProperties: true } }
+                riskLevel: { type: string }
+                handoffSuggested: { type: boolean }
+    LoginRequest: { type: object, properties: { username: { type: string }, password: { type: string } } }
+    UserUpsert: { type: object, properties: { displayName: { type: string }, mobile: { type: string }, userType: { type: string } } }
+    RegionUpsert: { type: object, properties: { parentId: { type: string }, regionCode: { type: string }, regionName: { type: string }, regionType: { type: string } } }
+    DeviceTypeUpsert: { type: object, properties: { typeCode: { type: string }, typeName: { type: string }, family: { type: string }, capabilityJson: { type: object, additionalProperties: true }, defaultConfigJson: { type: object, additionalProperties: true } } }
+    DeviceUpsert: { type: object, properties: { deviceTypeId: { type: string }, regionId: { type: string }, deviceCode: { type: string }, deviceName: { type: string }, serialNo: { type: string }, protocolType: { type: string } } }
+    WellUpsert: { type: object, properties: { deviceId: { type: string }, wellCode: { type: string }, waterSourceType: { type: string } } }
+    PumpUpsert: { type: object, properties: { deviceId: { type: string }, wellId: { type: string }, pumpCode: { type: string }, ratedPowerKw: { type: number } } }
+    ValveUpsert: { type: object, properties: { deviceId: { type: string }, wellId: { type: string }, valveCode: { type: string }, valveKind: { type: string } } }
+    BillingPackageUpsert: { type: object, properties: { packageCode: { type: string }, packageName: { type: string }, billingMode: { type: string }, unitPrice: { type: number }, unitType: { type: string }, scopeType: { type: string }, scopeRefId: { type: string } } }
+    WellRuntimePolicyUpsert: { type: object, properties: { wellId: { type: string }, billingPackageId: { type: string }, powerThresholdKw: { type: number }, minRunSeconds: { type: integer }, maxRunSeconds: { type: integer }, concurrencyLimit: { type: integer } } }
+    PumpValveRelationUpsert: { type: object, properties: { wellId: { type: string }, pumpId: { type: string }, valveId: { type: string }, relationRole: { type: string, enum: [primary, backup, forbidden] } } }
+    RuntimeStartCheckRequest: { type: object, required: [targetType, targetId], properties: { targetType: { type: string, enum: [valve, well, session] }, targetId: { type: string }, sceneCode: { type: string } } }
+    CreateRuntimeSessionRequest: { type: object, required: [decisionId], properties: { decisionId: { type: string }, confirmToken: { type: string } } }
+    WorkOrderCreate: { type: object, properties: { sourceAlarmId: { type: string }, sourceSessionId: { type: string }, workOrderType: { type: string }, assigneeUserId: { type: string } } }
+    UatCaseCreate: { type: object, properties: { caseCode: { type: string }, roleType: { type: string }, scenarioName: { type: string }, expectedResult: { type: string } } }
+    CreateConversationRequest: { type: object, properties: { topic: { type: string } } }
+    SendMessageRequest: { type: object, required: [message], properties: { message: { type: string } } }
+    HandoffRequest: { type: object, required: [handoffType, reason], properties: { handoffType: { type: string, enum: [manual_service, work_order] }, reason: { type: string } } }
+    AiWorkOrderRequest: { type: object, required: [issueType, description], properties: { issueType: { type: string }, description: { type: string } } }
