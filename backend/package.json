@@ -12,7 +12,16 @@
     "db:down": "docker compose -f docker-compose.yml down",
     "db:migrate": "powershell -ExecutionPolicy Bypass -File ./scripts/migrate.ps1",
     "db:migrate:reset": "powershell -ExecutionPolicy Bypass -File ./scripts/migrate.ps1 -Reset",
-    "db:seed": "powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1",
+    "db:seed": "npm run db:seed:reference",
+    "db:seed:reference:sql": "powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group reference",
+    "db:seed:reference": "npm run db:seed:reference:sql && npm run region-reference:import",
+    "db:seed:baseline": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group baseline",
+    "db:seed:demo": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group demo",
+    "db:seed:test": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group test",
+    "db:seed:all": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group all",
+    "testdata:cleanup": "ts-node ./scripts/cleanup-test-data.ts",
+    "region-reference:import": "ts-node ./scripts/import-region-reference.ts",
+    "region-reference:verify": "ts-node ./scripts/verify-region-reference.ts",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
   },
   "dependencies": {
