@@ -71,6 +71,31 @@ interface AssetTypeOption {
   label: string;
 }
 
+interface AssetLocationSearchItem {
+  manual_region_id: string;
+  region_code: string;
+  region_name: string;
+  region_level: string;
+  full_path_name: string;
+  manual_address_text: string;
+  manual_latitude: number | null;
+  manual_longitude: number | null;
+}
+
+interface AssetLocationSearchResponse {
+  items: AssetLocationSearchItem[];
+  total: number;
+  page: number;
+  page_size: number;
+  scope: {
+    project_id: string;
+    project_name: string;
+    region_id: string;
+    region_code: string;
+    region_name: string;
+  };
+}
+
 interface CreateAssetDto {
   asset_code?: string;
   asset_name?: string;
@@ -138,6 +163,10 @@ function parsePage(value?: string, fallback = 1) {
 function parsePageSize(value?: string, fallback = 20) {
   const parsed = Number(value);
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+function escapeLikePattern(value: string) {
+  return value.replace(/[\\%_]/g, '\\$&');
 }
 
 function assetTypeLabel(value: AssetType): string {
@@ -257,6 +286,44 @@ class AssetService {
         }
       });
     }
+  }
+
+  private async getProjectScope(projectId: string, client?: Parameters<DatabaseService['query']>[2]) {
+    const result = await this.db.query<{
+      project_id: string;
+      project_name: string;
+      region_id: string;
+      region_code: string;
+      region_name: string;
+      full_path_code: string;
+    }>(
+      `
+      select
+        p.id as project_id,
+        p.project_name,
+        r.id as region_id,
+        r.region_code,
+        r.region_name,
+        rr.full_path_code
+      from project p
+      join region r on r.id = p.region_id
+      join region_reference rr on rr.code = r.region_code
+      where p.tenant_id = $1 and p.id = $2
+      `,
+      [TENANT_ID, projectId],
+      client
+    );
+
+    const row = result.rows[0];
+    if (!row) {
+      throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
+        fieldErrors: {
+          project_id: 'project_id is invalid'
+        }
+      });
+    }
+
+    return row;
   }
 
   private async ensureParentAssetExists(parentAssetId: string, client?: Parameters<DatabaseService['query']>[2]) {
@@ -467,6 +534,88 @@ class AssetService {
       throw appException(HttpStatus.NOT_FOUND, 'TARGET_NOT_FOUND', 'Asset not found', { id });
     }
     return row;
+  }
+
+  async searchLocations(projectId: string, q: string, page = 1, pageSize = 20): Promise<AssetLocationSearchResponse> {
+    const normalizedProjectId = projectId.trim();
+    const normalizedQuery = q.trim();
+    if (!normalizedProjectId) {
+      throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
+        fieldErrors: {
+          project_id: 'project_id is required'
+        }
+      });
+    }
+    if (normalizedQuery.length < 2) {
+      throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
+        fieldErrors: {
+          q: 'q must be at least 2 characters'
+        }
+      });
+    }
+
+    const scope = await this.getProjectScope(normalizedProjectId);
+    const offset = (page - 1) * pageSize;
+    const likeQuery = `%${escapeLikePattern(normalizedQuery)}%`;
+    const scopedPrefix = `${scope.full_path_code}/%`;
+
+    const result = await this.db.query<
+      {
+        code: string;
+        name: string;
+        level: string;
+        full_path_name: string;
+        total_count: string;
+      }
+    >(
+      `
+      select
+        rr.code,
+        rr.name,
+        rr.level,
+        rr.full_path_name,
+        count(*) over()::text as total_count
+      from region_reference rr
+      where rr.enabled = true
+        and (
+          rr.full_path_code = $1
+          or rr.full_path_code like $2 escape '\\'
+        )
+        and (
+          rr.code ilike $3 escape '\\'
+          or rr.name ilike $3 escape '\\'
+          or rr.full_path_name ilike $3 escape '\\'
+        )
+      order by
+        case when rr.code = $4 then 0 else 1 end,
+        rr.full_path_code asc
+      limit $5 offset $6
+      `,
+      [scope.full_path_code, scopedPrefix, likeQuery, scope.region_code, pageSize, offset]
+    );
+
+    return {
+      items: result.rows.map(({ total_count, ...row }) => ({
+        manual_region_id: row.code,
+        region_code: row.code,
+        region_name: row.name,
+        region_level: row.level,
+        full_path_name: row.full_path_name,
+        manual_address_text: row.full_path_name,
+        manual_latitude: null,
+        manual_longitude: null
+      })),
+      total: result.rows.length > 0 ? Number(result.rows[0].total_count) : 0,
+      page,
+      page_size: pageSize,
+      scope: {
+        project_id: scope.project_id,
+        project_name: scope.project_name,
+        region_id: scope.region_id,
+        region_code: scope.region_code,
+        region_name: scope.region_name
+      }
+    };
   }
 
   async create(dto: CreateAssetDto) {
@@ -691,6 +840,16 @@ class AssetController {
   @Get('type-options')
   typeOptions() {
     return this.service.typeOptions();
+  }
+
+  @Get('location-search')
+  searchLocations(
+    @Query('project_id') projectId?: string,
+    @Query('q') q?: string,
+    @Query('page') page?: string,
+    @Query('page_size') pageSize?: string
+  ) {
+    return this.service.searchLocations(projectId ?? '', q ?? '', parsePage(page), parsePageSize(pageSize));
   }
 
   @Get(':id')
