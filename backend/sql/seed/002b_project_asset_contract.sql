@@ -24,7 +24,7 @@ values
   )
 on conflict (tenant_id, team_name) do nothing;
 
-insert into project (id, tenant_id, project_code, project_name, region_id, maintenance_team_id, status, owner, contact_phone, operator, remarks, created_at, updated_at)
+insert into project (id, tenant_id, project_code, project_name, region_id, manual_region_id, maintenance_team_id, status, owner, contact_phone, operator, remarks, created_at, updated_at)
 values
   (
     '00000000-0000-0000-0000-000000000801',
@@ -32,6 +32,7 @@ values
     'PRJ-HJ-001',
     'Houji North Irrigation Demo',
     '00000000-0000-0000-0000-000000000203',
+    '610431001',
     '00000000-0000-0000-0000-000000000701',
     'active',
     'County Water Bureau',
@@ -47,6 +48,7 @@ values
     'PRJ-HJ-002',
     'Houji South Irrigation Demo',
     '00000000-0000-0000-0000-000000000205',
+    '610431001001',
     null,
     'draft',
     'Town Water Station',

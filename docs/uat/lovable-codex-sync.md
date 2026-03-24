@@ -29,6 +29,14 @@ Owner:
 - The first frontend CRUD attempt for `wells`, `devices`, and `pump-valve-relations` is exploratory only.
 - The domain has now been re-frozen as:
   - Region -> Project -> Asset tree -> Device -> Relations -> Location
+- Project now also has an explicit manual physical-location administrative field baseline:
+  - `project.region_id`
+    - business ownership region
+    - business `region.id` UUID only
+  - `project.manual_region_id`
+    - project-side manual physical-location administrative region
+    - `region_reference.code` only
+  - this field exists to let Asset create default its physical location from the selected Project without re-mixing ownership and physical-location semantics
 - LVB-4003 is closed: the Asset form now has a dedicated `manual_region_id` selector and the manual-location block is considered closed for the first Asset wave.
 - Asset / asset_tree first wave is currently considered closed enough to move forward.
 - LVB-4004 is functionally complete: the unified device ledger first wave now has `asset_id`, `device_type`, and `manual_region_id` selectors, manual-location grouping, and a read-only communication-identity boundary.
@@ -287,6 +295,7 @@ Special rule:
 | 2026-03-24 | COD-2026-03-24-001 maintenance-team backend baseline delivered | Added the minimal `maintenance_team` backend baseline under clean-slate rules: new `maintenance_team` table plus `project.maintenance_team_id` and `asset.maintenance_team_id`, REST endpoints for list/options/create/update/detail, Project default-team read model, Asset override-team and effective-team read model, focused e2e coverage, and cleanup inclusion so maintenance-team demo/test data does not linger after verification. This is the required backend baseline before any frontend `LVB-4014` execution. | fixed |
 | 2026-03-24 | COD-2026-03-24-002 asset location-search backend baseline delivered | Added the minimal project-scoped Asset physical-location search contract without reopening the location model: `GET /api/v1/assets/location-search` now requires `project_id` and fuzzy query `q`, constrains candidates by the selected project's business-region subtree, and returns `manual_region_id = region_reference.code` plus default `manual_address_text = full_path_name`. No new GIS tables or frontend sync were introduced, and verification data was cleaned after the focused e2e passed. This is the required backend baseline before any frontend `LVB-4015` execution. | fixed |
 | 2026-03-24 | COD-2026-03-24-004 region-reference recovery and regression prevention | Recovered the nationwide `region_reference` library in the shared verification environment, proved it survives `npm run testdata:cleanup`, and fixed the seed regression path so `db:seed:baseline`, `db:seed:demo`, and `db:seed:test` now rebuild the nationwide reference library first instead of silently falling back to the old 1-province sample SQL slice. Shared/local safe reset order is now explicit: `db:migrate:reset -> db:seed:reference -> optional baseline/demo/test -> testdata:cleanup`. | fixed |
+| 2026-03-24 | COD-2026-03-24-005 project physical-location administrative-region backend baseline | Added the minimum Project-side physical-location administrative field baseline under clean-slate rules: `project.manual_region_id` is now a separate `region_reference.code` field, distinct from business `project.region_id`; Project create/update/detail/options/list now expose the new field plus derived path/name values; and the baseline seed now carries project-level physical-location codes so Asset create can default its manual physical region from the selected project without re-mixing ownership and location semantics. | fixed |
 
 ## Process rule
 

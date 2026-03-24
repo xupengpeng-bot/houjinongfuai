@@ -22,49 +22,47 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-24
 - task id
-  - `COD-2026-03-24-004`
+  - `COD-2026-03-24-005`
 - status
   - fixed
 - changed files
-  - `backend/package.json`
-  - `backend/scripts/seed.ps1`
-  - `docs/README.md`
+  - `backend/src/modules/project/project.module.ts`
+  - `backend/sql/migrations/013_project_physical_location_baseline.sql`
+  - `backend/sql/seed/002b_project_asset_contract.sql`
+  - `backend/test/e2e/project-physical-location-baseline.e2e-spec.ts`
   - `docs/uat/lovable-codex-sync.md`
   - `docs/codex/RESULT.md`
 - migration or contract summary
-  - recovered the nationwide `region_reference` library in the current verification environment
-  - fixed the seed regression path so `db:seed:baseline`, `db:seed:demo`, `db:seed:test`, and `db:seed:all` all rebuild nationwide `region_reference` first through `db:seed:reference`
-  - kept `testdata:cleanup` scoped to business/test rows only; it still does not delete `region_reference`
-  - documented the safe reset/reseed order for shared or local verification environments
+  - added additive Project physical-location administrative-region baseline under clean-slate rules
+  - new field:
+    - `project.manual_region_id`
+    - canonical value: `region_reference.code`
+  - kept `project.region_id` unchanged as business `region.id` UUID only
+  - Project create / update / detail / list / options now expose:
+    - `manual_region_id`
+    - `manual_region_name`
+    - `manual_region_full_path_name`
+  - create / update now validate the new field directly against `region_reference`
+  - baseline demo seed now gives Project sample rows explicit physical-location region codes so Asset create can default from Project without re-mixing ownership and location semantics
 - verification result
-  - initial `npm run region-reference:verify` showed the bad live state:
-    - province `1`
-    - city `1`
-    - county `1`
-    - town `1`
-    - village `3`
-  - `npm run db:seed:reference` restored nationwide reference data
-  - direct DB verification after recovery showed:
-    - total `665276`
-    - province `31`
-    - city `342`
-    - county `2978`
-    - town `41352`
-    - village `620573`
-  - sequential validation passed:
-    - `npm run db:migrate:reset`
-    - `npm run db:seed:baseline`
-    - `npm run region-reference:verify`
+  - `npm run build` passed
+  - `npm run db:migrate:reset` passed
+  - `npm run db:seed:baseline` passed
+  - focused e2e passed:
+    - `npm run test:e2e -- --runInBand test/e2e/project-physical-location-baseline.e2e-spec.ts`
+  - manual seed verification on a clean baseline passed:
+    - `002b_project_asset_contract.sql` applied successfully after baseline reseed
+    - seeded Projects carried `manual_region_id` values such as `610431001` and `610431001001`
+  - cleanup passed after verification:
     - `npm run testdata:cleanup`
-    - `npm run region-reference:verify`
-  - post-cleanup verification still showed the same nationwide counts, proving `region_reference` survives cleanup
-  - note: one failed intermediate attempt was caused by my own parallel execution of reset/seed/verify; final acceptance is based only on the sequential rerun
+    - `region_reference` remained at nationwide scale after cleanup (`665276`)
 - commit SHA or `no git action`
-  - pending local commit
+  - `pending`
 - frontend impact
-  - frontend region-library dropdown verification can proceed again against real nationwide root data
-  - `COD-2026-03-24-003` can resume after PM dispatches it again
+  - no frontend business code was modified in this task
+  - frontend can later default Asset `manual_region_id` from the selected Project's `manual_region_id`
+  - no `lovablecomhis` files were touched in this round
 - pending issues
-  - none
+  - none for task scope
 - next handoff target
-  - PM may reactivate `COD-2026-03-24-003` for frontend Git pull and local `LVB-4013` acceptance
+  - PM can now decide whether to activate the next frontend-facing wave that consumes the new Project physical-location field

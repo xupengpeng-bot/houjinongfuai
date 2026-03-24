@@ -29,6 +29,9 @@ interface ProjectRecord {
   region_id: string;
   region_name: string;
   region_full_path_name?: string;
+  manual_region_id: string | null;
+  manual_region_name: string | null;
+  manual_region_full_path_name: string | null;
   maintenance_team_id: string | null;
   maintenance_team_name: string | null;
   status: ProjectStatus;
@@ -45,12 +48,16 @@ interface ProjectOption {
   region_id: string;
   region_name: string;
   region_full_path_name?: string;
+  manual_region_id: string | null;
+  manual_region_name: string | null;
+  manual_region_full_path_name: string | null;
   status: string;
 }
 
 interface CreateProjectDto {
   project_name?: string;
   region_id?: string;
+  manual_region_id?: string | null;
   maintenance_team_id?: string | null;
   status?: ProjectStatus;
   owner?: string;
@@ -62,6 +69,7 @@ interface CreateProjectDto {
 interface UpdateProjectDto {
   project_code?: string;
   region_id?: string;
+  manual_region_id?: string | null;
   maintenance_team_id?: string | null;
   project_name?: string;
   status?: ProjectStatus;
@@ -136,6 +144,26 @@ class ProjectService {
     }
   }
 
+  private async ensureManualRegionCodeExists(regionCode: string, client?: PoolClient) {
+    const result = await this.db.query<{ code: string }>(
+      `
+      select code
+      from region_reference
+      where code = $1 and enabled = true
+      `,
+      [regionCode],
+      client
+    );
+
+    if (!result.rows[0]) {
+      throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
+        fieldErrors: {
+          manual_region_id: 'manual_region_id is invalid'
+        }
+      });
+    }
+  }
+
   private async ensureActiveMaintenanceTeamExists(maintenanceTeamId: string, client?: PoolClient) {
     const result = await this.db.query<{ id: string }>(
       `
@@ -167,6 +195,9 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
+        p.manual_region_id,
+        mrr.name as manual_region_name,
+        mrr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status,
@@ -178,6 +209,7 @@ class ProjectService {
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
+      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1
       order by p.created_at asc
@@ -206,12 +238,16 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
+        p.manual_region_id,
+        mrr.name as manual_region_name,
+        mrr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
+      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1
       order by p.created_at asc
@@ -231,6 +267,9 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
+        p.manual_region_id,
+        mrr.name as manual_region_name,
+        mrr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status,
@@ -241,6 +280,7 @@ class ProjectService {
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
+      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1 and p.id = $2
       `,
@@ -274,8 +314,12 @@ class ProjectService {
 
     const created = await this.db.withTransaction(async (client) => {
       const resolvedRegionId = dto.region_id!.trim();
+      const resolvedManualRegionId = dto.manual_region_id?.trim() || null;
       const generatedProjectCode = await this.generateProjectCode(client);
       await this.ensureBusinessRegionExists(resolvedRegionId, client);
+      if (resolvedManualRegionId) {
+        await this.ensureManualRegionCodeExists(resolvedManualRegionId, client);
+      }
       if (dto.maintenance_team_id?.trim()) {
         await this.ensureActiveMaintenanceTeamExists(dto.maintenance_team_id.trim(), client);
       }
@@ -287,13 +331,14 @@ class ProjectService {
           project_code,
           project_name,
           region_id,
+          manual_region_id,
           maintenance_team_id,
           status,
           owner,
           contact_phone,
           operator,
           remarks
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
         returning id
         `,
         [
@@ -301,6 +346,7 @@ class ProjectService {
           generatedProjectCode,
           dto.project_name!.trim(),
           resolvedRegionId,
+          resolvedManualRegionId,
           dto.maintenance_team_id?.trim() || null,
           dto.status ?? 'draft',
           dto.owner!.trim(),
@@ -336,6 +382,7 @@ class ProjectService {
     const existing = await this.getById(id);
     const next = {
       region_id: dto.region_id?.trim() ?? existing.region_id,
+      manual_region_id: dto.manual_region_id === undefined ? existing.manual_region_id : dto.manual_region_id?.trim() || null,
       maintenance_team_id: dto.maintenance_team_id === undefined ? existing.maintenance_team_id : dto.maintenance_team_id?.trim() || null,
       project_name: dto.project_name?.trim() ?? existing.project_name,
       status: dto.status ?? existing.status,
@@ -348,6 +395,9 @@ class ProjectService {
     await this.db.withTransaction(async (client) => {
       const resolvedRegionId = next.region_id;
       await this.ensureBusinessRegionExists(resolvedRegionId, client);
+      if (next.manual_region_id) {
+        await this.ensureManualRegionCodeExists(next.manual_region_id, client);
+      }
       if (next.maintenance_team_id) {
         await this.ensureActiveMaintenanceTeamExists(next.maintenance_team_id, client);
       }
@@ -358,16 +408,17 @@ class ProjectService {
         set
           project_name = $3,
           region_id = $4,
-          maintenance_team_id = $5,
-          status = $6,
-          owner = $7,
-          contact_phone = $8,
-          operator = $9,
-          remarks = $10,
+          manual_region_id = $5,
+          maintenance_team_id = $6,
+          status = $7,
+          owner = $8,
+          contact_phone = $9,
+          operator = $10,
+          remarks = $11,
           updated_at = now()
         where tenant_id = $1 and id = $2
         `,
-        [TENANT_ID, id, next.project_name, resolvedRegionId, next.maintenance_team_id, next.status, next.owner, next.contact_phone, next.operator, next.remarks],
+        [TENANT_ID, id, next.project_name, resolvedRegionId, next.manual_region_id, next.maintenance_team_id, next.status, next.owner, next.contact_phone, next.operator, next.remarks],
         client
       );
     });
