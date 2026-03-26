@@ -43,7 +43,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-035` fixed `LVB-4028` handoff synced to frontend Git `main`
   - `COD-2026-03-27-001` fixed `LVB-4028` local verify passed
   - `COD-2026-03-27-002` fixed cockpit run-monitor / alert-center / history-replay backend aggregation first batch
-  - `COD-2026-03-27-003` fixed `LVB-4029` handoff synced to frontend Git `main` at `c963793`
+  - `COD-2026-03-27-003` fixed `LVB-4029` handoff synced to frontend Git `main`
+  - `COD-2026-03-27-004` recorded `LVB-4029` local verify at frontend Git `HEAD` `2b72a05d7ef5d6cef03a75dae396c443edaabf35` — **partial**; DTO mismatch with `COD-2026-03-27-002` (see `RESULT.md`)
 - active task
   - none
 
@@ -60,7 +61,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-27-003_前端LVB-4029任务包同步到Git主线任务.md`
+8. `docs/codex/COD-2026-03-27-004_LVB-4029前端本地验收任务.md`（已关闭；结果见 `RESULT.md`）
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
@@ -78,7 +79,7 @@ Do not modify other directories unless PM updates this file.
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Sync only the files explicitly listed in the task file.
+- Verify only. Do not patch frontend business code during acceptance.
 
 ## Result writeback
 
