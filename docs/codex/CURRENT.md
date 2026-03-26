@@ -27,8 +27,9 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-018` fixed — backend compatibility layer added for `LVB-4021`
   - `COD-2026-03-26-019` fixed — `LVB-4022` handoff synced to frontend Git `main`
   - `COD-2026-03-26-020` fixed — `LVB-4022` local acceptance passed for the first-batch interaction scope
-  - `COD-2026-03-26-021` fixed — searchable options and project-linked filtering contract batch completed locally
-  - `COD-2026-03-26-022` fixed — `COD-021` 后端已推送 `main` `3a556e9`（见 `docs/codex/RESULT.md`）
+  - `COD-2026-03-26-021` fixed — searchable options and project-linked filtering contract batch completed locally and pushed
+  - `COD-2026-03-26-022` fixed — backend 021 code pushed to Git main
+  - `COD-2026-03-26-023` fixed — `LVB-4023` handoff 已推送到前端 Git `main` `94c9df4`（见 `docs/codex/RESULT.md`）
 - active task
   - none
 
@@ -45,13 +46,13 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-26-022_后端021代码提交到Git主线任务.md`
+8. `docs/codex/COD-2026-03-26-023_前端LVB-4023任务包同步到Git主线任务.md`
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
-- `D:\20251211\zhinengti\houjinongfuai\backend`
 - `D:\20251211\zhinengti\houjinongfuai\docs`
+- `D:\20251211\zhinengti\lovable`
 
 Do not modify other directories unless PM updates this file.
 
@@ -63,7 +64,7 @@ Do not modify other directories unless PM updates this file.
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Do not mix unrelated worktree changes into this commit.
+- Sync only the files explicitly listed in the task file.
 
 ## Result writeback
 
