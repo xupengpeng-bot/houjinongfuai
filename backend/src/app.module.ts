@@ -22,6 +22,8 @@ import { AiConversationModule } from './modules/ai-conversation/ai-conversation.
 import { HealthModule } from './modules/health/health.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
 import { MaintenanceTeamModule } from './modules/maintenance-team/maintenance-team.module';
+import { ProjectBlockModule } from './modules/project-block/project-block.module';
+import { MeteringPointModule } from './modules/metering-point/metering-point.module';
 
 @Module({
   imports: [
@@ -47,6 +49,8 @@ import { MaintenanceTeamModule } from './modules/maintenance-team/maintenance-te
     OrderModule,
     DashboardModule,
     MaintenanceTeamModule,
+    ProjectBlockModule,
+    MeteringPointModule,
     AlarmModule,
     WorkOrderModule,
     UatModule,
