@@ -45,8 +45,9 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-002` fixed cockpit run-monitor / alert-center / history-replay backend aggregation first batch
   - `COD-2026-03-27-003` fixed `LVB-4029` handoff synced to frontend Git `main`
   - `COD-2026-03-27-004` partial `LVB-4029` VERIFY: DTO shape mismatch against backend `COD-2026-03-27-002`
-  - `COD-2026-03-27-005` fixed `LVB-4030` handoff synced to frontend Git `main` at `edf5039`
-  - `COD-2026-03-27-006` partial `LVB-4030` VERIFY：聚合层字段已对齐；行级 DTO / `severity_counts` 与后端 `COD-2026-03-27-002` 仍不一致（见 `RESULT.md`）
+  - `COD-2026-03-27-005` fixed `LVB-4030` handoff synced to frontend Git `main`
+  - `COD-2026-03-27-006` partial `LVB-4030` VERIFY: row-level DTO mismatch remains on three cockpit pages
+  - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main` at `8c0a966eb54a3e21921f3b27eb707c487e404145`
 - active task
   - none
 
@@ -63,8 +64,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-27-006_LVB-4030前端本地验收任务.md`
-9. `docs/codex/RESULT.md`
+8. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
