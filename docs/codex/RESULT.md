@@ -42,7 +42,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - `npm run build`（`backend`）通过。
   - E2E：`block-metering-contract` 内新增用例在 **`E2E_WITH_DB=1`** 下跑 DB；默认 **skip** 不改变 CI 默认行为。
 - commit SHA or `no git action`
-  - `4832790`
+  - `9ae5f96`
 - frontend impact
   - 无（未改前端）；真实模式 **`ProjectOverview`** 可直接消费 **`well_count` 等** 与 **`027`** 字段并存。
 - pending issues
