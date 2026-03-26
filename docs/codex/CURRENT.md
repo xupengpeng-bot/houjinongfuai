@@ -51,7 +51,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-008` partial `LVB-4031` VERIFY: row-level DTO mismatch still remains
   - `COD-2026-03-27-009` fixed `LVB-4032` handoff synced to frontend Git `main`
   - `COD-2026-03-27-010` partial `LVB-4032` VERIFY: alert timestamp mapping still missing
-  - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main` at `b4b2b6a9647a399ea3d065531b6993684e597bad`
+  - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main`
+  - `COD-2026-03-27-012` fixed `LVB-4033` local VERIFY passed at frontend Git `HEAD` `21881ecf0f047419bc0dbbe50e8666249bcf3399`
 - active task
   - none
 
@@ -68,7 +69,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/RESULT.md`
+8. `docs/codex/COD-2026-03-27-012_LVB-4033前端本地验收任务.md`
+9. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
