@@ -53,7 +53,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - `npm run build`（`backend`）通过。
   - E2E：新用例在 **`E2E_WITH_DB=1`** 下执行；默认 **skip** 与仓库既有策略一致。
 - commit SHA or `no git action`
-  - `32aa628`
+  - `f34bdd8`
 - frontend impact
   - 无前端改动；下一波可并行接 **`run-monitor` / `alert-center` / `history-replay`** 三页。
 - pending issues
