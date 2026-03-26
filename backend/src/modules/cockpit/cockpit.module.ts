@@ -102,6 +102,65 @@ export interface HistoryReplayDto {
   sessions: HistoryReplaySessionRow[];
 }
 
+/** COD-2026-03-27-013: auto-scheduling cockpit aggregate */
+export interface AutoSchedulingRecentDispatchRow {
+  dispatch_id: string;
+  session_id: string;
+  session_no: string | null;
+  command_code: string;
+  dispatch_status: string;
+  target_device_name: string | null;
+  created_at: string;
+}
+
+export interface AutoSchedulingInsightRow {
+  kind: 'session_note' | 'alarm';
+  id: string;
+  summary: string;
+  severity: string | null;
+  created_at: string;
+}
+
+export interface AutoSchedulingDto {
+  /** command_dispatch rows whose created_at falls on Asia/Shanghai local today */
+  today_dispatch_count: number;
+  today_success_count: number;
+  today_failed_count: number;
+  today_pending_count: number;
+  recent_dispatches: AutoSchedulingRecentDispatchRow[];
+  /** 最近解释 / 风险提示壳：会话备注 + 未关闭告警摘要 */
+  recent_insights: AutoSchedulingInsightRow[];
+}
+
+/** COD-2026-03-27-013: cost & finance cockpit aggregate */
+export interface CostFinanceProjectBlockRow {
+  project_id: string;
+  project_name: string;
+  block_id: string;
+  block_code: string;
+  block_name: string;
+  period_usage_m3: number;
+  period_cost_yuan: number;
+  /** Phase 1 placeholder until metering energy is persisted on orders */
+  period_energy_kwh: number;
+}
+
+export interface CostFinanceDto {
+  period: {
+    kind: 'calendar_month';
+    timezone: string;
+    month_start: string;
+    month_end: string;
+  };
+  today_water_m3: number;
+  today_energy_kwh: number;
+  today_cost_yuan: number;
+  period_water_m3: number;
+  period_energy_kwh: number;
+  period_cost_yuan: number;
+  project_block_costs: CostFinanceProjectBlockRow[];
+}
+
 @Controller('ops')
 class CockpitOpsController {
   constructor(private readonly db: DatabaseService) {}
@@ -518,6 +577,301 @@ class CockpitOpsController {
       filter: { project_id: pid, block_id: bid },
       total,
       sessions
+    });
+  }
+
+  /** COD-2026-03-27-013: device command dispatch as scheduling proxy */
+  @Get('auto-scheduling')
+  async autoScheduling(): Promise<ReturnType<typeof ok<AutoSchedulingDto>>> {
+    const tz = 'Asia/Shanghai';
+    const counts = await this.db.query<{
+      today_dispatch_count: number;
+      today_success_count: number;
+      today_failed_count: number;
+      today_pending_count: number;
+    }>(
+      `
+      select
+        count(*)::int as today_dispatch_count,
+        count(*) filter (
+          where cd.dispatch_status in ('success', 'acked')
+        )::int as today_success_count,
+        count(*) filter (
+          where cd.dispatch_status in ('timeout', 'failed', 'error', 'rejected', 'nack')
+        )::int as today_failed_count,
+        count(*) filter (
+          where cd.dispatch_status not in (
+            'success', 'acked', 'timeout', 'failed', 'error', 'rejected', 'nack'
+          )
+        )::int as today_pending_count
+      from command_dispatch cd
+      where (cd.created_at at time zone '${tz}')::date =
+        (current_timestamp at time zone '${tz}')::date
+      `
+    );
+
+    const recent = await this.db.query<{
+      dispatch_id: string;
+      session_id: string;
+      session_no: string | null;
+      command_code: string;
+      dispatch_status: string;
+      target_device_name: string | null;
+      created_at: Date;
+    }>(
+      `
+      select
+        cd.id as dispatch_id,
+        cd.session_id,
+        rs.session_no,
+        cd.command_code,
+        cd.dispatch_status,
+        coalesce(d.device_name, d.device_code) as target_device_name,
+        cd.created_at
+      from command_dispatch cd
+      left join runtime_session rs on rs.id = cd.session_id
+      join device d on d.id = cd.target_device_id
+      order by cd.created_at desc
+      limit 20
+      `
+    );
+
+    const notes = await this.db.query<{
+      id: string;
+      summary: string;
+      created_at: Date;
+    }>(
+      `
+      select id, coalesce(reason_text, action_code) as summary, created_at
+      from session_status_log
+      where reason_text is not null and trim(reason_text) <> ''
+      order by created_at desc
+      limit 5
+      `
+    );
+
+    const alarms = await this.db.query<{
+      id: string;
+      summary: string;
+      severity: string;
+      created_at: Date;
+    }>(
+      `
+      select
+        id,
+        coalesce(trigger_reason_json->>'message', alarm_code) as summary,
+        severity,
+        created_at
+      from alarm_event
+      where status in ('open', 'processing', 'pending')
+      order by created_at desc
+      limit 5
+      `
+    );
+
+    const insights: AutoSchedulingInsightRow[] = [
+      ...notes.rows.map((r) => ({
+        kind: 'session_note' as const,
+        id: r.id,
+        summary: r.summary,
+        severity: null,
+        created_at: r.created_at.toISOString()
+      })),
+      ...alarms.rows.map((r) => ({
+        kind: 'alarm' as const,
+        id: r.id,
+        summary: r.summary,
+        severity: r.severity,
+        created_at: r.created_at.toISOString()
+      }))
+    ].sort((a, b) => (a.created_at < b.created_at ? 1 : -1));
+
+    const c = counts.rows[0];
+    return ok({
+      today_dispatch_count: c.today_dispatch_count,
+      today_success_count: c.today_success_count,
+      today_failed_count: c.today_failed_count,
+      today_pending_count: c.today_pending_count,
+      recent_dispatches: recent.rows.map((r) => ({
+        dispatch_id: r.dispatch_id,
+        session_id: r.session_id,
+        session_no: r.session_no,
+        command_code: r.command_code,
+        dispatch_status: r.dispatch_status,
+        target_device_name: r.target_device_name,
+        created_at: r.created_at.toISOString()
+      })),
+      recent_insights: insights.slice(0, 10)
+    });
+  }
+
+  /** COD-2026-03-27-013: billing usage + block cost shell */
+  @Get('cost-finance')
+  async costFinance(): Promise<ReturnType<typeof ok<CostFinanceDto>>> {
+    const tz = 'Asia/Shanghai';
+    const col = await this.db.query<{ has_block: boolean }>(
+      `
+      select exists (
+        select 1
+        from information_schema.columns
+        where table_schema = 'public'
+          and table_name = 'well'
+          and column_name = 'block_id'
+      ) as has_block
+      `
+    );
+    const wellHasBlockId = col.rows[0]?.has_block === true;
+
+    const summary = await this.db.query<{
+      today_water_m3: number;
+      today_cost_yuan: number;
+      period_water_m3: number;
+      period_cost_yuan: number;
+    }>(
+      `
+      select
+        coalesce(sum(
+          case
+            when (io.created_at at time zone '${tz}')::date =
+              (current_timestamp at time zone '${tz}')::date
+            then coalesce(io.charge_volume, 0)
+            else 0
+          end
+        ), 0)::float8 as today_water_m3,
+        coalesce(sum(
+          case
+            when (io.created_at at time zone '${tz}')::date =
+              (current_timestamp at time zone '${tz}')::date
+            then coalesce(io.amount, 0)
+            else 0
+          end
+        ), 0)::float8 as today_cost_yuan,
+        coalesce(sum(
+          case
+            when date_trunc(
+              'month',
+              io.created_at at time zone '${tz}'
+            ) = date_trunc('month', current_timestamp at time zone '${tz}')
+            then coalesce(io.charge_volume, 0)
+            else 0
+          end
+        ), 0)::float8 as period_water_m3,
+        coalesce(sum(
+          case
+            when date_trunc(
+              'month',
+              io.created_at at time zone '${tz}'
+            ) = date_trunc('month', current_timestamp at time zone '${tz}')
+            then coalesce(io.amount, 0)
+            else 0
+          end
+        ), 0)::float8 as period_cost_yuan
+      from irrigation_order io
+      `
+    );
+
+    const blocks = wellHasBlockId
+      ? await this.db.query<{
+          project_id: string;
+          project_name: string;
+          block_id: string;
+          block_code: string;
+          block_name: string;
+          period_usage_m3: number;
+          period_cost_yuan: number;
+        }>(
+          `
+          select
+            pb.project_id,
+            p.project_name,
+            pb.id as block_id,
+            pb.block_code,
+            pb.block_name,
+            coalesce(sum(io.charge_volume), 0)::float8 as period_usage_m3,
+            coalesce(sum(io.amount), 0)::float8 as period_cost_yuan
+          from project_block pb
+          join project p on p.id = pb.project_id
+          left join well w on w.block_id = pb.id
+          left join runtime_session rs on rs.well_id = w.id
+          left join irrigation_order io
+            on io.session_id = rs.id
+            and date_trunc('month', io.created_at at time zone '${tz}') =
+              date_trunc('month', current_timestamp at time zone '${tz}')
+          group by pb.id, p.project_name, pb.block_code, pb.block_name, pb.project_id
+          order by period_cost_yuan desc, pb.block_name asc
+          limit 50
+          `
+        )
+      : await this.db.query<{
+          project_id: string;
+          project_name: string;
+          block_id: string;
+          block_code: string;
+          block_name: string;
+          period_usage_m3: number;
+          period_cost_yuan: number;
+        }>(
+          `
+          select
+            pb.project_id,
+            p.project_name,
+            pb.id as block_id,
+            pb.block_code,
+            pb.block_name,
+            0::float8 as period_usage_m3,
+            0::float8 as period_cost_yuan
+          from project_block pb
+          join project p on p.id = pb.project_id
+          order by p.project_name asc, pb.block_name asc
+          limit 50
+          `
+        );
+
+    const bounds = await this.db.query<{ month_start: Date; month_end: Date }>(
+      `
+      select
+        (
+          date_trunc('month', current_timestamp at time zone '${tz}')
+          at time zone '${tz}'
+        ) as month_start,
+        (
+          (
+            date_trunc('month', current_timestamp at time zone '${tz}')
+            + interval '1 month'
+            - interval '1 second'
+          ) at time zone '${tz}'
+        ) as month_end
+      `
+    );
+    const b = bounds.rows[0];
+    const toIso = (v: Date | string) =>
+      v instanceof Date ? v.toISOString() : new Date(v).toISOString();
+
+    const s = summary.rows[0];
+
+    return ok({
+      period: {
+        kind: 'calendar_month',
+        timezone: tz,
+        month_start: toIso(b.month_start as unknown as Date | string),
+        month_end: toIso(b.month_end as unknown as Date | string)
+      },
+      today_water_m3: s.today_water_m3,
+      today_energy_kwh: 0,
+      today_cost_yuan: s.today_cost_yuan,
+      period_water_m3: s.period_water_m3,
+      period_energy_kwh: 0,
+      period_cost_yuan: s.period_cost_yuan,
+      project_block_costs: blocks.rows.map((b) => ({
+        project_id: b.project_id,
+        project_name: b.project_name,
+        block_id: b.block_id,
+        block_code: b.block_code,
+        block_name: b.block_name,
+        period_usage_m3: b.period_usage_m3,
+        period_cost_yuan: b.period_cost_yuan,
+        period_energy_kwh: 0
+      }))
     });
   }
 }

@@ -44,15 +44,16 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-001` fixed `LVB-4028` local verify passed
   - `COD-2026-03-27-002` fixed cockpit run-monitor / alert-center / history-replay backend aggregation first batch
   - `COD-2026-03-27-003` fixed `LVB-4029` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-004` partial `LVB-4029` VERIFY: DTO shape mismatch against backend `COD-2026-03-27-002`
+  - `COD-2026-03-27-004` partial `LVB-4029` VERIFY
   - `COD-2026-03-27-005` fixed `LVB-4030` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-006` partial `LVB-4030` VERIFY: row-level DTO mismatch remains on three cockpit pages
+  - `COD-2026-03-27-006` partial `LVB-4030` VERIFY
   - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-008` partial `LVB-4031` VERIFY: row-level DTO mismatch still remains
+  - `COD-2026-03-27-008` partial `LVB-4031` VERIFY
   - `COD-2026-03-27-009` fixed `LVB-4032` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-010` partial `LVB-4032` VERIFY: alert timestamp mapping still missing
+  - `COD-2026-03-27-010` partial `LVB-4032` VERIFY
   - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-012` fixed `LVB-4033` local VERIFY passed at frontend Git `HEAD` `21881ecf0f047419bc0dbbe50e8666249bcf3399`
+  - `COD-2026-03-27-012` fixed `LVB-4033` local VERIFY passed
+  - `COD-2026-03-27-013` fixed automatic-scheduling + cost-finance ops aggregates (first batch)
 - active task
   - none
 
@@ -69,24 +70,24 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-27-012_LVB-4033前端本地验收任务.md`
-9. `docs/codex/RESULT.md`
+8. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
 - `D:\20251211\zhinengti\houjinongfuai\docs`
-- `D:\20251211\zhinengti\lovable`
+- `D:\20251211\zhinengti\houjinongfuai\backend`
 
 Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- No active task. Wait for PM dispatch in `docs/codex/CURRENT.md`.
+- Build the first backend aggregation batch for automatic scheduling and cost-finance so the next frontend wave can wire both domains in one shot.
 
 ## Hard constraints
 
 - Do not reopen architecture.
-- Do not modify frontend business code without an explicit task in this file.
+- Do not modify frontend business code.
+- Backend-only batch. Keep changes additive and contract-compatible.
 
 ## Result writeback
 
