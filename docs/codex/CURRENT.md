@@ -26,20 +26,21 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-017` fixed `LVB-4021` local re-verify passed
   - `COD-2026-03-26-018` fixed backend compatibility layer added for `LVB-4021`
   - `COD-2026-03-26-019` fixed `LVB-4022` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-020` fixed `LVB-4022` local acceptance passed for the first-batch interaction scope
+  - `COD-2026-03-26-020` fixed `LVB-4022` local acceptance passed
   - `COD-2026-03-26-021` fixed searchable options and project-linked filtering contract batch completed locally and pushed
   - `COD-2026-03-26-022` fixed backend 021 code pushed to Git main
   - `COD-2026-03-26-023` fixed `LVB-4023` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-024` fixed `LVB-4023` local acceptance passed for the first-batch searchable-linkage scope
+  - `COD-2026-03-26-024` fixed `LVB-4023` local acceptance passed
   - `COD-2026-03-26-025` fixed `LVB-4024` handoff synced to frontend Git `main`
   - `COD-2026-03-26-026` fixed `LVB-4024` local acceptance passed
   - `COD-2026-03-26-027` fixed cockpit backend aggregation first batch completed
   - `COD-2026-03-26-028` fixed `LVB-4025` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-029` fixed `LVB-4025` local acceptance partial; cockpit real-mode mismatch requires frontend closure
+  - `COD-2026-03-26-029` fixed `LVB-4025` local acceptance partial
   - `COD-2026-03-26-030` fixed `LVB-4026` handoff pushed to frontend Git `main`
-  - `COD-2026-03-26-031` partial `LVB-4026` VERIFY: block cockpit aligned, project-overview still mismatched against backend `027`
+  - `COD-2026-03-26-031` partial `LVB-4026` VERIFY
   - `COD-2026-03-26-032` fixed cockpit backend aggregation enlarged for one-shot frontend closure
-  - `COD-2026-03-26-033` fixed `LVB-4027` handoff synced to frontend Git `main` at `beda49c`
+  - `COD-2026-03-26-033` fixed `LVB-4027` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-035` fixed `LVB-4028` handoff synced to frontend Git `main` at `9e0b9d6`
 - active task
   - none
 
@@ -56,7 +57,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-26-033_前端LVB-4027任务包同步到Git主线任务.md`
+8. `docs/codex/COD-2026-03-26-035_前端LVB-4028任务包同步到Git主线任务.md`
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
