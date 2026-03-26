@@ -22,35 +22,30 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-010`（`VERIFY`：`LVB-4032` 本地验收）
+  - `COD-2026-03-27-011`（`SYNC`：`LVB-4033` handoff → 前端 Git `main`）
 - mode
-  - **`VERIFY`**
+  - **`SYNC`**
 - status
-  - **`partial`**（构建与拉取通过；**`cockpit.ts` 中央映射已落地**，但 **`AlertCenter` 行时间字段与后端 `created_at` 未对齐**，**`LVB-4032` 不可按「最终收口完成」关闭）
+  - **`done`**（仅同步任务单所列 6 个 handoff 文件；未提交 `src/`、`.env`、`LOVABLE-PERMANENT-RULES.md`）
 - changed files / synced files
-  - **`houjinongfuai`**：`docs/codex/CURRENT.md`、`docs/codex/RESULT.md`、`docs/codex/COD-2026-03-27-010_LVB-4032前端本地验收任务.md`
-  - 未修改 `lovable/src`（验收禁止本地补业务代码）
+  - **`lovable`**（6 个文件，见 `COD-2026-03-27-011` §2）：
+    - `lovablecomhis/CURRENT.md`
+    - `lovablecomhis/WAVE.md`
+    - `lovablecomhis/README.md`
+    - `lovablecomhis/LVB-4033-预警时间列映射最终收口.md`
+    - `lovablecomhis/context/LVB-4033-context.md`
+    - `lovablecomhis/fixtures/LVB-4033/README.md`
+  - **`houjinongfuai`**：`docs/codex/CURRENT.md`、`docs/codex/RESULT.md`、`docs/codex/COD-2026-03-27-011_前端LVB-4033任务包同步到Git主线任务.md`
 - migration or contract summary
   - 无。
 - verification result
-  - **硬门槛（`D:\20251211\zhinengti\lovable`）**
-    - `git pull --ff-only origin main`：自 **`a298378`** fast-forward 至 **`814dcc8ff3eb62cc6689ca2740daf0693fdf5ad0`**
-    - `git rev-parse HEAD` / `origin/main`：**一致**
-    - `git status --short`：`M lovablecomhis/LOVABLE-PERMANENT-RULES.md`；`?? .env`
-  - **`npm run build`**：**通过**（约 50s）
-  - **对照 `backend/.../cockpit.module.ts`（`COD-2026-03-27-002`）与 `src/api/services/cockpit.ts`**
-    - **`getRunMonitor` / `getAlertCenter` / `getHistoryReplay`**：real 模式已走 **`normalizeRunMonitor` / `normalizeAlertCenter` / `normalizeHistoryReplay`**，**中央映射成立**。
-    - **`RunMonitor`**：`started_at` 与聚合字段已数值化；**`well_name` / `flow_m3` / `duration_minutes`** 后端行无同源字段时由 normalizer 置空/0，**与此前 VERIFY 结论一致**（展示列可为空）。
-    - **`AlertCenter`**：**`severity_counts`** 四桶已对齐；**`normalizeAlertItem`** 中 **`triggered_at: raw.triggered_at ?? ""`**，**未回退 `raw.created_at`**，与后端 **`AlertCenterRecentRow.created_at`** 不一致 → **真实模式时间列无效**。
-    - **`HistoryReplay`**：**`normalizeHistoryItem`** 已将 **`started_at`/`ended_at`** 并入 **`start_time`/`end_time`**；**`well_name`/`operator`/`flow_m3`** 等后端无字段时为空或 0（预期限制）。
-  - **中文 / 壳层**：三页 loading/empty/error 与 **`Record` → 中文** 仍成立。
+  - **`lovable`**：`git push origin main` 成功；**`HEAD`** **`b4b2b6a9647a399ea3d065531b6993684e597bad`** 与 **`origin/main`** 一致。
+  - 未纳入提交：`lovablecomhis/LOVABLE-PERMANENT-RULES.md`、未跟踪 **`.env`**（与任务约束一致）。
 - commit SHA or `no git action`
-  - 验收基准前端 **`main`**：**`814dcc8ff3eb62cc6689ca2740daf0693fdf5ad0`**
+  - 前端 **`main`**：**`b4b2b6a9647a399ea3d065531b6993684e597bad`**（短 **`b4b2b6a`**，`Sync LVB-4033 handoff package (COD-2026-03-27-011)`）
 - frontend impact
-  - 允许改 **`src`** 的下一手：在 **`normalizeAlertItem`** 增加 **`created_at` → `triggered_at`**（或页面改读统一字段）；可选补齐 **`ALERT_STATUS_MAP`** 对 **`open`/`closed`** 等后端状态字。
+  - **`LVB-4033`** 任务包（**`created_at` → `triggered_at`** 收口说明）已在 **`main`**；实现仅限 **`cockpit.ts`** 按任务 §2；完成后可 **`npm run build`** 并派 **`VERIFY`**。
 - pending issues
-  - **`lovable`**：`LOVABLE-PERMANENT-RULES.md`、**`.env`** 未跟踪（与验收无关）。
+  - 无（除 **`lovable`** 本地 **`LOVABLE-PERMANENT-RULES.md`** / **`.env`** 噪音）。
 - next handoff target
-  - 修补 **`created_at` 映射** 后重跑 **`VERIFY`** 或 PM 关闭口径确认。
-- **LVB-4032 是否可关闭（任务 §6.5）**
-  - **否**（当前 **`partial`**）
+  - 前端按 **`LVB-4033`** 改 **`normalizeAlertItem`**；PM 可再派 **VERIFY**。

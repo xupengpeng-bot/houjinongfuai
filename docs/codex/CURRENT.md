@@ -50,7 +50,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main`
   - `COD-2026-03-27-008` partial `LVB-4031` VERIFY: row-level DTO mismatch still remains
   - `COD-2026-03-27-009` fixed `LVB-4032` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-010` partial `LVB-4032` VERIFY：中央映射已落地；**`AlertCenter` 行时间未从后端 `created_at` 映射到展示用 `triggered_at`**（见 `RESULT.md`）
+  - `COD-2026-03-27-010` partial `LVB-4032` VERIFY: alert timestamp mapping still missing
+  - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main` at `b4b2b6a9647a399ea3d065531b6993684e597bad`
 - active task
   - none
 
