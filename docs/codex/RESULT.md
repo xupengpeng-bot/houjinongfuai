@@ -37,7 +37,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - test / build result
   - `npm run build`（`backend`）通过
 - commit SHA or no git action
-  - **`dd6b3e2`** — `feat(ops): cockpit project-overview and block-cockpit aggregates (COD-2026-03-26-027)`
+  - **`948068e`** — `feat(ops): cockpit project-overview and block-cockpit aggregates (COD-2026-03-26-027)`
 - pending issues
   - 未挂 `block_id` 的井在区块行中 **total/running/用量/告警** 均为 **0**；生产需运维或拓扑任务回填 `well.block_id`
   - 项目态势为 **租户库全量** 聚合；若多租户 IAM 收紧，需在 service 层加 `tenant_id` 过滤
