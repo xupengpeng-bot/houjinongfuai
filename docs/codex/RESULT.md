@@ -46,6 +46,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - frontend impact
   - **`LVB-4033`** 任务包（**`created_at` → `triggered_at`** 收口说明）已在 **`main`**；实现仅限 **`cockpit.ts`** 按任务 §2；完成后可 **`npm run build`** 并派 **`VERIFY`**。
 - pending issues
-  - 无（除 **`lovable`** 本地 **`LOVABLE-PERMANENT-RULES.md`** / **`.env`** 噪音）。
+  - **`houjinongfuai`**：`git push origin main` 失败（网络）；本地相对 **`origin/main`** 超前，恢复后执行 **`git push origin main`**（见 **`git log origin/main..HEAD`**）。
+  - **`lovable`**：本地 **`LOVABLE-PERMANENT-RULES.md`** / **`.env`** 未纳入 SYNC。
 - next handoff target
   - 前端按 **`LVB-4033`** 改 **`normalizeAlertItem`**；PM 可再派 **VERIFY**。
