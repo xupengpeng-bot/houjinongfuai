@@ -11,35 +11,38 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 3. status
 4. changed files
 5. migration or contract summary
-6. test / build result
-7. commit SHA or no git action
-8. pending issues
-9. next handoff target
+6. verification result
+7. commit SHA or `no git action`
+8. frontend impact
+9. pending issues
+10. next handoff target
 
 ## Latest result
 
 - execution time
   - 2026-03-26
 - task id
-  - `COD-2026-03-26-027`（驾驶舱项目态势与区块态势后端聚合第一批，`BACKEND`）
+  - `COD-2026-03-26-028`（`LVB-4025` handoff 同步到前端 Git `main`，`SYNC`）
 - status
   - `fixed`
 - changed files
-  - `backend/sql/migrations/017_well_block_id_cockpit.sql` — `well.block_id` 可选 FK → `project_block`，供区块级聚合
-  - `backend/sql/seed/005_well_block_cockpit_link.sql` — 演示井 `501` / `507` 挂到 `004` 中的 demo block `…0a01`
-  - `backend/scripts/seed.ps1` — demo 组增加 `005_well_block_cockpit_link.sql`
-  - `backend/src/modules/cockpit/cockpit.module.ts` — `GET ops/project-overview`、`GET ops/block-cockpit`
-  - `backend/src/app.module.ts` — 注册 `CockpitModule`
-  - `docs/codex/RESULT.md`、`docs/codex/CURRENT.md`、`docs/codex/COD-2026-03-26-027_驾驶舱项目态势与区块态势后端聚合第一批任务.md`
-- contract summary
-  - **`GET /api/v1/ops/project-overview`**（标准 `ok` 壳）：`project_count`、`block_count`、`active_well_count`（`well`×`device` lifecycle active）、`online_metering_point_count`（`metering_point` active 且无主表设备或设备 `online`）、`running_session_count`、`open_alert_count`、`open_work_order_count`（与 dashboard 口径对齐）
-  - **`GET /api/v1/ops/block-cockpit?project_id=&q=`**：返回 `{ items: [...] }`，每条含 `block_id`、`block_code`、`block_name`、`project_id`、`project_name`、`status`、`running_well_count`、`total_well_count`、`today_usage_m3`（当日 `irrigation_order.charge_volume` 按上海时区日期）、`open_alert_count`（告警设备解析到井再按 `well.block_id` 过滤）
-- test / build result
-  - `npm run build`（`backend`）通过
-- commit SHA or no git action
-  - **`948068e`** — `feat(ops): cockpit project-overview and block-cockpit aggregates (COD-2026-03-26-027)`
+  - 前端仓（`D:\20251211\zhinengti\lovable`）：仅提交 5 个 handoff 文件（**未**包含 `src/`、`LOVABLE-PERMANENT-RULES.md`、`.env`）。
+    - `lovablecomhis/CURRENT.md`（**active** → **`LVB-4025`**，read order / execute now 已更新）
+    - `lovablecomhis/WAVE.md`（**LVB-4025** → **`synced_ready`**；Audience 行修复）
+    - `lovablecomhis/LVB-4025-驾驶舱项目态势与区块态势真实接线第一批.md`（**`synced_ready`**）
+    - `lovablecomhis/context/LVB-4025-context.md`（**`synced_ready`**）
+    - `lovablecomhis/fixtures/LVB-4025/README.md`
+  - 本仓库：`docs/codex/RESULT.md`、`docs/codex/CURRENT.md`、`docs/codex/COD-2026-03-26-028_前端LVB-4025任务包同步到Git主线任务.md`
+- migration or contract summary
+  - n/a
+- verification result
+  - **`git push origin main` 成功**；远端 **`refs/heads/main`** == **`0cc0d8e79cab2b3078658d0f4ed376dc51d1f532`**（short **`0cc0d8e`**）。
+  - 提交仅含上述 5 个路径；**`LVB-4025`** 任务包已在 **`main`** 可见。
+- commit SHA or `no git action`
+  - **前端 `main` tip：** `0cc0d8e79cab2b3078658d0f4ed376dc51d1f532`
+- frontend impact
+  - handoff 与 Lovable 执行入口；**无**业务代码变更。
 - pending issues
-  - 未挂 `block_id` 的井在区块行中 **total/running/用量/告警** 均为 **0**；生产需运维或拓扑任务回填 `well.block_id`
-  - 项目态势为 **租户库全量** 聚合；若多租户 IAM 收紧，需在 service 层加 `tenant_id` 过滤
+  - 本地未提交：`lovablecomhis/LOVABLE-PERMANENT-RULES.md`、`?? .env`（未纳入本次同步）。
 - next handoff target
-  - 前端驾驶舱卡片改调上述两接口；部署环境执行 **migration 017** 与含 **005** 的 demo seed（或等价数据补丁）
+  - Lovable 执行 **`LVB-4025`**（`ProjectOverview` / `BlockCockpit` 接 `ops/project-overview` 与 `ops/block-cockpit`，见任务正文）。

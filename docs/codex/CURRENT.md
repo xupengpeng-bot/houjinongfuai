@@ -33,7 +33,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-024` fixed — `LVB-4023` local acceptance passed for the first-batch searchable-linkage scope
   - `COD-2026-03-26-025` fixed — `LVB-4024` handoff synced to frontend Git `main`
   - `COD-2026-03-26-026` fixed — `LVB-4024` local acceptance passed
-  - `COD-2026-03-26-027` fixed — `GET /api/v1/ops/project-overview` + `GET /api/v1/ops/block-cockpit`，migration `017` + seed `005`
+  - `COD-2026-03-26-027` fixed — cockpit backend aggregation first batch completed
+  - `COD-2026-03-26-028` fixed — `LVB-4025` handoff pushed to frontend Git `main` at `0cc0d8e…`
 - active task
   - none
 
@@ -50,15 +51,13 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-26-027_驾驶舱项目态势与区块态势后端聚合第一批任务.md`
+8. 最新 `docs/codex/COD-*` 任务文件（若 PM 有下发）
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
-- `D:\20251211\zhinengti\houjinongfuai\backend`
 - `D:\20251211\zhinengti\houjinongfuai\docs`
-- `D:\20251211\zhinengti\houjinongfuai\qa`
-- `D:\20251211\zhinengti\houjinongfuai\scripts` if a task explicitly needs it
+- `D:\20251211\zhinengti\lovable`
 
 Do not modify other directories unless PM updates this file.
 
@@ -69,9 +68,8 @@ Do not modify other directories unless PM updates this file.
 ## Hard constraints
 
 - Do not reopen architecture.
-- Do not change `/u/scan`, `/u/session`, `/u/history`, `/ops/orders`, `/ops/sessions` runtime semantics.
-- Keep all new structure additive, auditable, and replayable.
 - Do not modify frontend business code.
+- Sync only the files explicitly listed in the task file.
 
 ## Result writeback
 
