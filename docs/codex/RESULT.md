@@ -36,7 +36,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - 已读 **`docs/codex/CURRENT.md`**：无 **`active task`**，无需跑 build / 测试。
   - **`git push origin main`**：**失败**（无法连接 **`github.com:443`**，与历史环境一致）。
 - commit SHA or `no git action`
-  - **`589446e`**（`docs(codex): idle execute result; align CURRENT Execute now with COD-013 closed`）
+  - **`6d84876`**（`docs(codex): idle execute result; align CURRENT Execute now with COD-013 closed`）
 - frontend impact
   - 无。
 - pending issues
