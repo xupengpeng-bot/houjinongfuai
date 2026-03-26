@@ -48,7 +48,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-005` fixed `LVB-4030` handoff synced to frontend Git `main`
   - `COD-2026-03-27-006` partial `LVB-4030` VERIFY: row-level DTO mismatch remains on three cockpit pages
   - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main`
-  - `COD-2026-03-27-008` partial `LVB-4031` VERIFY：已对齐 `started_at` 与 `severity_counts` 四桶；**`AlertCenter` 行 / `HistoryReplay` 行等仍与后端行级 DTO 不一致**（见 `RESULT.md`）
+  - `COD-2026-03-27-008` partial `LVB-4031` VERIFY: row-level DTO mismatch still remains
+  - `COD-2026-03-27-009` fixed `LVB-4032` handoff synced to frontend Git `main` at `a298378107dee654ab7778c0c9f742e02cd0db6f`
 - active task
   - none
 
@@ -65,7 +66,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/RESULT.md`
+8. `docs/codex/COD-2026-03-27-009_前端LVB-4032任务包同步到Git主线任务.md`
+9. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
