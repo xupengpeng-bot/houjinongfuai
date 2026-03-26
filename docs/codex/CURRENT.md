@@ -19,24 +19,25 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-24-003` fixed for `LVB-4016` local acceptance at frontend Git `HEAD` `b9af08cd6542c8a17972264f3e3268391605bef5`
   - `COD-2026-03-24-003` fixed for `LVB-4017` local acceptance at frontend Git `HEAD` `2e2ed374a5a958c7f5edc74c786656a9897c361a`
   - `COD-2026-03-24-003` fixed for `LVB-4018` local acceptance at frontend Git `HEAD` `55ff8805604f0a218fcde1d4f32ddcc85773e9f6`
-  - `COD-2026-03-26-013` fixed — block / metering-point / network-model / data-scope skeleton + solver contract skeleton
-  - `COD-2026-03-26-014` fixed — `LVB-4020` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-015` fixed — real backend contracts for `project-blocks` and `metering-points`
-  - `COD-2026-03-26-016` fixed — `LVB-4021` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-017` fixed — `LVB-4021` local re-verify passed
-  - `COD-2026-03-26-018` fixed — backend compatibility layer added for `LVB-4021`
-  - `COD-2026-03-26-019` fixed — `LVB-4022` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-020` fixed — `LVB-4022` local acceptance passed for the first-batch interaction scope
-  - `COD-2026-03-26-021` fixed — searchable options and project-linked filtering contract batch completed locally and pushed
-  - `COD-2026-03-26-022` fixed — backend 021 code pushed to Git main
-  - `COD-2026-03-26-023` fixed — `LVB-4023` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-024` fixed — `LVB-4023` local acceptance passed for the first-batch searchable-linkage scope
-  - `COD-2026-03-26-025` fixed — `LVB-4024` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-026` fixed — `LVB-4024` local acceptance passed
-  - `COD-2026-03-26-027` fixed — cockpit backend aggregation first batch completed
-  - `COD-2026-03-26-028` fixed — `LVB-4025` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-029` fixed — `LVB-4025` local acceptance partial; cockpit real-mode mismatch requires frontend closure
-  - `COD-2026-03-26-030` fixed — `LVB-4026` handoff pushed to frontend Git `main` at `c76b61f…`
+  - `COD-2026-03-26-013` fixed block / metering-point / network-model / data-scope skeleton + solver contract skeleton
+  - `COD-2026-03-26-014` fixed `LVB-4020` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-015` fixed real backend contracts for `project-blocks` and `metering-points`
+  - `COD-2026-03-26-016` fixed `LVB-4021` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-017` fixed `LVB-4021` local re-verify passed
+  - `COD-2026-03-26-018` fixed backend compatibility layer added for `LVB-4021`
+  - `COD-2026-03-26-019` fixed `LVB-4022` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-020` fixed `LVB-4022` local acceptance passed for the first-batch interaction scope
+  - `COD-2026-03-26-021` fixed searchable options and project-linked filtering contract batch completed locally and pushed
+  - `COD-2026-03-26-022` fixed backend 021 code pushed to Git main
+  - `COD-2026-03-26-023` fixed `LVB-4023` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-024` fixed `LVB-4023` local acceptance passed for the first-batch searchable-linkage scope
+  - `COD-2026-03-26-025` fixed `LVB-4024` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-026` fixed `LVB-4024` local acceptance passed
+  - `COD-2026-03-26-027` fixed cockpit backend aggregation first batch completed
+  - `COD-2026-03-26-028` fixed `LVB-4025` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-029` fixed `LVB-4025` local acceptance partial; cockpit real-mode mismatch requires frontend closure
+  - `COD-2026-03-26-030` fixed `LVB-4026` handoff pushed to frontend Git `main`
+  - `COD-2026-03-26-031` partial — `LVB-4026` VERIFY: `main` `922c280…`，build OK；区块驾驶舱与 `ops` 路径对齐 `027`；**ProjectOverview** 字段与 `027` 仍不一致（见 `docs/codex/RESULT.md`）
 - active task
   - none
 
@@ -71,7 +72,7 @@ Do not modify other directories unless PM updates this file.
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Sync only the files explicitly listed in the task file.
+- Verify only. Do not patch frontend business code during acceptance.
 
 ## Result writeback
 
