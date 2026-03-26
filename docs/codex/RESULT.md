@@ -22,30 +22,25 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-009`（`SYNC`：`LVB-4032` handoff → 前端 Git `main`）
+  - `none`（读 `docs/codex/CURRENT.md` / 「执行」）
 - mode
-  - **`SYNC`**
+  - **`IDLE`**
 - status
-  - **`done`**（仅同步任务单所列 6 个 handoff 文件；未提交 `src/`、`.env`、`LOVABLE-PERMANENT-RULES.md`）
+  - **`done_without_change`**（`CURRENT.md`：`Work mode` **`IDLE`**，`active task` **`none`**）
 - changed files / synced files
-  - **`lovable`**（6 个文件，见 `COD-2026-03-27-009` §2）：
-    - `lovablecomhis/CURRENT.md`
-    - `lovablecomhis/WAVE.md`
-    - `lovablecomhis/README.md`
-    - `lovablecomhis/LVB-4032-驾驶舱后三页最终行级DTO收口.md`
-    - `lovablecomhis/context/LVB-4032-context.md`
-    - `lovablecomhis/fixtures/LVB-4032/README.md`
-  - **`houjinongfuai`**：`docs/codex/CURRENT.md`、`docs/codex/RESULT.md`、`docs/codex/COD-2026-03-27-009_前端LVB-4032任务包同步到Git主线任务.md`
+  - **`docs/codex/CURRENT.md`**（Read order：去掉已关闭的 **`COD-2026-03-27-009`** 任务文件条目，仅保留至 **`RESULT.md`**）
+  - **`docs/codex/RESULT.md`**（本条 idle 回写）
 - migration or contract summary
   - 无。
 - verification result
-  - **`lovable`**：`git push origin main` 成功；**`HEAD`** **`a298378107dee654ab7778c0c9f742e02cd0db6f`** 与 **`origin/main`** 一致。
-  - 未纳入提交：`lovablecomhis/LOVABLE-PERMANENT-RULES.md`、未跟踪 **`.env`**（与任务约束一致）。
+  - 已读 **`CURRENT.md`**：无新派单；未执行 SYNC/VERIFY。
 - commit SHA or `no git action`
-  - 前端 **`main`**：**`a298378107dee654ab7778c0c9f742e02cd0db6f`**（短 **`a298378`**，`Sync LVB-4032 handoff package (COD-2026-03-27-009)`）
+  - 待本条文档提交后见 **`git log -1`**；**`houjinongfuai`** 与 **`origin/main`** 此前已对齐（上一手 **`571b9a7`** 已推送）。
 - frontend impact
-  - **`LVB-4032`** 最终行级收口任务包已在 **`main`**；Lovable 可按 **`lovablecomhis/CURRENT.md`** 在 **`src`** 内完成映射与页面收口；完成后可再派 **`VERIFY`**。
+  - 无。
 - pending issues
-  - **`houjinongfuai`** 文档提交需 **`git push`**（若本地仍超前于远端）。
+  - PM 在 **`docs/codex/CURRENT.md`** 写入 **`active task`** 后再「执行」。
 - next handoff target
-  - 前端实现 **`LVB-4032`** 并 **`npm run build`**；PM 可派发 **`VERIFY`**。
+  - 由 PM 更新 **`CURRENT.md`**。
+- **归档（上一手 SYNC）**
+  - **`COD-2026-03-27-009`** / **`LVB-4032`**：前端 **`a298378`**；详见关闭任务单或历史提交。

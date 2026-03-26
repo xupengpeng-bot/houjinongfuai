@@ -66,8 +66,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-27-009_前端LVB-4032任务包同步到Git主线任务.md`
-9. `docs/codex/RESULT.md`
+8. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
