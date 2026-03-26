@@ -20,27 +20,32 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 ## Latest result
 
 - execution time
-  - 2026-03-26
+  - 2026-03-27
 - task id
-  - `COD-2026-03-26-035`（前端 `LVB-4028` handoff 同步到 Git `main`，`SYNC`）
+  - `COD-2026-03-27-001`（`LVB-4028` 前端本地验收，`VERIFY`）
 - status
-  - `fixed`
-- changed files（frontend repo `D:\20251211\zhinengti\lovable`）
-  - `lovablecomhis/CURRENT.md` — 活跃任务 **`LVB-4028`**（第二波整批收口）；read order 指向 **`LVB-4028`** 任务包与 fixtures
-  - `lovablecomhis/WAVE.md` — **`LVB-4027`** **`closed`**；**`LVB-4028`** **`synced_ready`**（`COD-2026-03-26-035`）；**`Audience`** 保持 **`软件工程师`**
-  - `lovablecomhis/README.md` — 任务表增加 **`LVB-4028`** 为 **`synced_ready`**；保留 **`## Backlog`** 段（此前工作副本曾误删，已恢复）
-  - `lovablecomhis/LVB-4028-驾驶舱第二波整批收口.md` — **`synced_ready`**，并注明 **`COD-2026-03-26-035`** 同步
-  - `lovablecomhis/context/LVB-4028-context.md`
-  - `lovablecomhis/fixtures/LVB-4028/README.md`
+  - `fixed`（验收通过，**`LVB-4028` 可关闭**）
+- changed files / synced files
+  - 无业务代码改动；仅 **`docs/codex`** 回写（本条目）。
 - migration or contract summary
-  - 无 DDL/后端契约变更；实现仍依赖后端 **`COD-2026-03-26-032`**（`project-overview` 扩展、`block-cockpit` **`total`**）。**`LVB-4028`** 为 **`LVB-4027`** 的扩大整批收口版（一次做完第二波驾驶舱前端）。
+  - 无。
 - verification result
-  - 已 **`git pull --rebase`** 合并远端 **`main`** 后 **`git push origin main`**。未提交 **`src/`**、**`.env`**、**`LOVABLE-PERMANENT-RULES.md`**。
+  - **硬门槛（frontend `D:\20251211\zhinengti\lovable`）**
+    - `git rev-parse HEAD`：`49826d70d82ea60270c590300c34e6df3530d54d`
+    - `git rev-parse origin/main`：`49826d70d82ea60270c590300c34e6df3530d54d`（已与远端 **`main` fast-forward 对齐**）
+    - `git status --short`：`M lovablecomhis/LOVABLE-PERMANENT-RULES.md`；`?? .env`（**工作区非完全干净**，与本次验收拉取的 **`src`** 快照无关；验收基于已跟踪代码与 **`HEAD`**）
+  - **代码级核对（对照 `COD-032` / `LVB-4028` 口径）**
+    - **`ProjectOverview.tsx`**：卡片使用 **`project_count`、 `block_count`、 `well_count`、 `device_count`、 `running_wells`、 `today_usage_m3`、 `today_revenue_yuan`、 `pending_alerts`**，与 **`ProjectOverviewData`**（`src/api/types.ts`）及后端扩展字段一致；**loading / empty / error** 分支仍使用 **`LoadingState` / `EmptyState` / `ErrorState`**。
+    - **`BlockCockpit.tsx`**：从响应读取 **`data.total`**，标题区展示 **「共 {total} 个区块」**；区块 **`status`** 经 **`STATUS_LABEL`** 映射为中文；**`useBlockCockpit`** + **`cockpitService.getBlockCockpit`**（`src/api/services/cockpit.ts`）在 real 模式下解析 **`items` + `total`**。
+    - **英文枚举泄漏**：页面展示为中文标签；**Badge** 使用映射表，兜底为 **「未知状态」**（非英文枚举直出）。
+    - **项目过滤与搜索**：**`SearchableSelect`**（项目）+ **搜索输入**（区块名）仍在。
+  - **`npm run build`**（`lovable` 根目录）：**通过**（`vite build` 成功，约 15s）。
 - commit SHA or `no git action`
-  - 前端仓库：`9e0b9d6`（`docs(lovablecomhis): sync LVB-4028 handoff package (COD-2026-03-26-035)`）
+  - 验收所依据的前端 **`main`**：`49826d70d82ea60270c590300c34e6df3530d54d`
 - frontend impact
-  - **`LVB-4028`** 在 **`lovablecomhis`** 为 **`synced_ready`**，Lovable 可按任务文件一次完成 **`ProjectOverview` / `BlockCockpit` / 标签与 fallback** 整批收口并 **`npm run build`**。
+  - **`LVB-4028`** 在 **`49826d7`** 上满足整批收口验收口径，可在 **`WAVE.md` / `lovablecomhis`** 侧将任务标为 **closed**（由 PM/Lovable 流程收口语义决定，非本提交修改前端文件）。
 - pending issues
-  - 本地仍存在 **`lovablecomhis/LOVABLE-PERMANENT-RULES.md`** 未提交修改（按任务排除）。
+  - 本地 **`LOVABLE-PERMANENT-RULES.md`**、未跟踪 **`.env`** 导致 **git 非干净**；建议在专用克隆或清理后做纯 **`HEAD`** 复核。
+  - **`browserslist`/chunk 体积** 仅为 build 提示，非验收失败项。
 - next handoff target
-  - Lovable 执行 **`LVB-4028`**；随后由 PM 派发 **VERIFY** 或下一任务（更新 **`CURRENT.md`**）。
+  - PM 更新 **`CURRENT.md`** 派发下一项；若需对外同步，可将 **`lovablecomhis/WAVE.md`** 中 **`LVB-4028`** 标为 **`closed`** 并记录验收 **`HEAD`**。

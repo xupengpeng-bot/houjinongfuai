@@ -40,7 +40,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-031` partial `LVB-4026` VERIFY
   - `COD-2026-03-26-032` fixed cockpit backend aggregation enlarged for one-shot frontend closure
   - `COD-2026-03-26-033` fixed `LVB-4027` handoff synced to frontend Git `main`
-  - `COD-2026-03-26-035` fixed `LVB-4028` handoff synced to frontend Git `main` at `9e0b9d6`
+  - `COD-2026-03-26-035` fixed `LVB-4028` handoff synced to frontend Git `main`
+  - `COD-2026-03-27-001` fixed `LVB-4028` locally verified at frontend Git `HEAD` `49826d70d82ea60270c590300c34e6df3530d54d`
 - active task
   - none
 
@@ -57,7 +58,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-26-035_前端LVB-4028任务包同步到Git主线任务.md`
+8. `docs/codex/COD-2026-03-27-001_LVB-4028前端本地验收任务.md`
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
@@ -75,7 +76,7 @@ Do not modify other directories unless PM updates this file.
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Sync only the files explicitly listed in the task file.
+- Verify only. Do not patch frontend business code during acceptance.
 
 ## Result writeback
 
