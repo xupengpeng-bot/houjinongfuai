@@ -29,7 +29,11 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-020` fixed — `LVB-4022` local acceptance passed for the first-batch interaction scope
   - `COD-2026-03-26-021` fixed — searchable options and project-linked filtering contract batch completed locally and pushed
   - `COD-2026-03-26-022` fixed — backend 021 code pushed to Git main
-  - `COD-2026-03-26-023` fixed — `LVB-4023` handoff 已推送到前端 Git `main` `94c9df4`（见 `docs/codex/RESULT.md`）
+  - `COD-2026-03-26-023` fixed — `LVB-4023` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-024` fixed — `LVB-4023` local acceptance passed for the first-batch searchable-linkage scope
+  - `COD-2026-03-26-025` fixed — `LVB-4024` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-026` fixed — `LVB-4024` local acceptance passed
+  - `COD-2026-03-26-027` fixed — `GET /api/v1/ops/project-overview` + `GET /api/v1/ops/block-cockpit`，migration `017` + seed `005`
 - active task
   - none
 
@@ -46,13 +50,15 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. `docs/codex/COD-2026-03-26-023_前端LVB-4023任务包同步到Git主线任务.md`
+8. `docs/codex/COD-2026-03-26-027_驾驶舱项目态势与区块态势后端聚合第一批任务.md`
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
 
+- `D:\20251211\zhinengti\houjinongfuai\backend`
 - `D:\20251211\zhinengti\houjinongfuai\docs`
-- `D:\20251211\zhinengti\lovable`
+- `D:\20251211\zhinengti\houjinongfuai\qa`
+- `D:\20251211\zhinengti\houjinongfuai\scripts` if a task explicitly needs it
 
 Do not modify other directories unless PM updates this file.
 
@@ -63,8 +69,9 @@ Do not modify other directories unless PM updates this file.
 ## Hard constraints
 
 - Do not reopen architecture.
+- Do not change `/u/scan`, `/u/session`, `/u/history`, `/ops/orders`, `/ops/sessions` runtime semantics.
+- Keep all new structure additive, auditable, and replayable.
 - Do not modify frontend business code.
-- Sync only the files explicitly listed in the task file.
 
 ## Result writeback
 

@@ -19,7 +19,9 @@ $seedGroups = @{
   demo = @(
     '002_assets.sql',
     '002b_project_asset_contract.sql',
-    '003_billing_policy_topology.sql'
+    '003_billing_policy_topology.sql',
+    '004_block_metering_network_skeleton.sql',
+    '005_well_block_cockpit_link.sql'
   )
   test = @(
     '010_smoke_runtime_order.sql',

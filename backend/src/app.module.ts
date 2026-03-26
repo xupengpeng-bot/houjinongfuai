@@ -21,6 +21,7 @@ import { UatModule } from './modules/uat/uat.module';
 import { AiConversationModule } from './modules/ai-conversation/ai-conversation.module';
 import { HealthModule } from './modules/health/health.module';
 import { DashboardModule } from './modules/dashboard/dashboard.module';
+import { CockpitModule } from './modules/cockpit/cockpit.module';
 import { MaintenanceTeamModule } from './modules/maintenance-team/maintenance-team.module';
 import { ProjectBlockModule } from './modules/project-block/project-block.module';
 import { MeteringPointModule } from './modules/metering-point/metering-point.module';
@@ -48,6 +49,7 @@ import { MeteringPointModule } from './modules/metering-point/metering-point.mod
     RuntimeModule,
     OrderModule,
     DashboardModule,
+    CockpitModule,
     MaintenanceTeamModule,
     ProjectBlockModule,
     MeteringPointModule,
