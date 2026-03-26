@@ -22,30 +22,25 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-26
 - task id
-  - `COD-2026-03-26-032`（驾驶舱聚合增强第二批，`BACKEND`）
+  - `COD-2026-03-26-033`（前端 `LVB-4027` handoff 同步到 Git `main`，`SYNC`）
 - status
   - `fixed`
-- changed files
-  - `backend/src/modules/cockpit/cockpit.module.ts` — `ProjectOverviewDto` 增加兼容字段；`block-cockpit` 响应增加 **`total`**
-  - `backend/test/e2e/block-metering-contract.e2e-spec.ts` — `COD-032` 两条用例（`E2E_WITH_DB=1` 时执行）
-  - `docs/codex/RESULT.md`、`docs/codex/CURRENT.md`、`docs/codex/COD-2026-03-26-032_驾驶舱聚合增强第二批任务.md`
-- contract summary
-  - **`GET /api/v1/ops/project-overview`**（`ok` 壳内 `data`）：在保留 **`027`** 原有 7 个字段外，**加法**增加：
-    - **`well_count`** — `count(*) from well`
-    - **`device_count`** — `count(*) from device`
-    - **`running_wells`** — 运行中会话的 **distinct `well_id`**
-    - **`today_usage_m3`** — 当日 `irrigation_order.charge_volume` 合计（**Asia/Shanghai** 日历日）
-    - **`today_revenue_yuan`** — 当日 `irrigation_order.amount` 合计（同上）
-    - **`pending_alerts`** — 与 **`open_alert_count`** 同源（待处理告警条数）
-  - **`GET /api/v1/ops/block-cockpit`**：`data` 为 **`{ items, total }`**，`total === items.length`；**`items[]` 行结构不变**。
+- changed files（frontend repo `D:\20251211\zhinengti\lovable`）
+  - `lovablecomhis/CURRENT.md` — 活跃任务切换为 **`LVB-4027`**，read order 指向 4027 任务包与 fixtures
+  - `lovablecomhis/WAVE.md` — **`LVB-4026`** 标为 **`closed`**；新增 **`LVB-4027`** 为 **`synced_ready`**（`COD-2026-03-26-033`）
+  - `lovablecomhis/README.md` — 任务表补充 **`LVB-4023`–`LVB-4027`** 行；**`LVB-4027`** 为 **`synced_ready`**
+  - `lovablecomhis/LVB-4027-驾驶舱项目态势与区块总量真实对齐第二批.md` — 任务说明与 **`COD-032`** 契约对齐；**`synced_ready`**
+  - `lovablecomhis/context/LVB-4027-context.md`
+  - `lovablecomhis/fixtures/LVB-4027/README.md`
+- migration or contract summary
+  - 无 schema / 后端契约变更；仅 handoff 文档与队列状态同步。实现依赖仍为后端 **`COD-2026-03-26-032`**（`project-overview` 扩展字段、`block-cockpit` **`total`**）。
 - verification result
-  - `npm run build`（`backend`）通过。
-  - E2E：`block-metering-contract` 内新增用例在 **`E2E_WITH_DB=1`** 下跑 DB；默认 **skip** 不改变 CI 默认行为。
+  - 已 **`git push origin main`**；未改动 `src/`、未提交 `.env`、未提交 `LOVABLE-PERMANENT-RULES.md`（与任务约束一致）。
 - commit SHA or `no git action`
-  - `9ae5f96`
+  - 前端仓库：`beda49c`（`docs(lovablecomhis): sync LVB-4027 handoff package (COD-2026-03-26-033)`）
 - frontend impact
-  - 无（未改前端）；真实模式 **`ProjectOverview`** 可直接消费 **`well_count` 等** 与 **`027`** 字段并存。
+  - **`LVB-4027`** 在 **`lovablecomhis`** 中为 **`synced_ready`**，Lovable 可按 **`CURRENT.md`** 与任务文件对 **`ProjectOverview` / `BlockCockpit` / `cockpit` API** 做实现与 **`npm run build`** 验收。
 - pending issues
-  - 前端可选择逐步弃用与 **`active_well_count`** 等并存的重复语义展示，仅展示兼容字段或仅展示 **`027`** 字段（产品定稿）。
+  - **`lovablecomhis/LOVABLE-PERMANENT-RULES.md`** 仍有本地修改未纳入本提交（按任务要求排除）。
 - next handoff target
-  - 前端一批：`ProjectOverviewData` 与 **`project-overview`** 全量字段对齐并 **VERIFY**；**`block-cockpit`** 可使用返回的 **`total`**。
+  - Lovable 执行 **`LVB-4027`**；软件工程侧下一节点一般为：前端实现落地后的 **`VERIFY`** / 本地验收（由 PM 在 **`CURRENT.md`** 中派发）。
