@@ -47,6 +47,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - frontend impact
   - **`LVB-4033`** 在 **`main`** 已落地：**预警时间列** 与后端 `created_at` 可映射。
 - pending issues
+  - **`houjinongfuai`**：`git push origin main` 失败（网络）；文档回写已本地提交 **`64aea8c`**，恢复网络后请推送。
   - **`lovable`**：`LOVABLE-PERMANENT-RULES.md`、**`.env`**（与验收无关）。
 - next handoff target
   - PM 下一派单或 UAT。
