@@ -54,6 +54,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main`
   - `COD-2026-03-27-012` fixed `LVB-4033` local VERIFY passed
   - `COD-2026-03-27-013` fixed automatic-scheduling + cost-finance ops aggregates (first batch)
+  - `COD-2026-03-27-014` fixed `LVB-4034` handoff files committed on frontend Git local `main` at `8becb20`（推送见 **`RESULT.md`**）
 - active task
   - none
 
@@ -81,13 +82,13 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`** and refresh **`Execute now`** here. Last closed backend batch: **`COD-2026-03-27-013`**（`ops/auto-scheduling`、`ops/cost-finance`）。
+- Wait for PM to set **`active task`**. Last sync batch：**`COD-2026-03-27-014`**（`LVB-4034` handoff，本地提交 **`8becb20`**）。
 
 ## Hard constraints
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Backend-only batch. Keep changes additive and contract-compatible.
+- Sync-only batch. Keep changes limited to handoff files and backend docs.
 
 ## Result writeback
 
