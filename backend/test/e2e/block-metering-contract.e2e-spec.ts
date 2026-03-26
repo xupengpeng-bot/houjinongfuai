@@ -76,4 +76,32 @@ describeOrSkip('project block + metering point contract (COD-2026-03-26-015 / 01
     expect(fo.body).toHaveProperty('blocks');
     expect(fo.body).toHaveProperty('point_types');
   });
+
+  it('COD-032: ops/project-overview includes legacy compat + aggregation fields', async () => {
+    const res = await request(app.getHttpServer()).get('/api/v1/ops/project-overview').expect(200);
+    const d = (res.body as { data?: Record<string, unknown> }).data ?? res.body;
+    expect(d).toMatchObject({
+      project_count: expect.any(Number),
+      block_count: expect.any(Number),
+      active_well_count: expect.any(Number),
+      online_metering_point_count: expect.any(Number),
+      running_session_count: expect.any(Number),
+      open_alert_count: expect.any(Number),
+      open_work_order_count: expect.any(Number),
+      well_count: expect.any(Number),
+      device_count: expect.any(Number),
+      running_wells: expect.any(Number),
+      today_usage_m3: expect.any(Number),
+      today_revenue_yuan: expect.any(Number),
+      pending_alerts: expect.any(Number)
+    });
+  });
+
+  it('COD-032: ops/block-cockpit returns items and total', async () => {
+    const res = await request(app.getHttpServer()).get('/api/v1/ops/block-cockpit').expect(200);
+    const d = (res.body as { data?: { items?: unknown[]; total?: number } }).data ?? res.body;
+    expect(Array.isArray(d.items)).toBe(true);
+    expect(typeof d.total).toBe('number');
+    expect(d.total).toBe(d.items?.length ?? 0);
+  });
 });

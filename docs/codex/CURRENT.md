@@ -37,7 +37,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-028` fixed `LVB-4025` handoff synced to frontend Git `main`
   - `COD-2026-03-26-029` fixed `LVB-4025` local acceptance partial; cockpit real-mode mismatch requires frontend closure
   - `COD-2026-03-26-030` fixed `LVB-4026` handoff pushed to frontend Git `main`
-  - `COD-2026-03-26-031` partial — `LVB-4026` VERIFY: `main` `922c280…`，build OK；区块驾驶舱与 `ops` 路径对齐 `027`；**ProjectOverview** 字段与 `027` 仍不一致（见 `docs/codex/RESULT.md`）
+  - `COD-2026-03-26-031` partial `LVB-4026` VERIFY: block cockpit aligned, project-overview still mismatched against backend `027`
+  - `COD-2026-03-26-032` fixed — cockpit `project-overview` compat fields + `block-cockpit` `total`（见 `docs/codex/RESULT.md`）
 - active task
   - none
 
@@ -60,7 +61,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 ## Allowed working area
 
 - `D:\20251211\zhinengti\houjinongfuai\docs`
-- `D:\20251211\zhinengti\lovable`
+- `D:\20251211\zhinengti\houjinongfuai\backend`
 
 Do not modify other directories unless PM updates this file.
 
@@ -72,7 +73,7 @@ Do not modify other directories unless PM updates this file.
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Verify only. Do not patch frontend business code during acceptance.
+- Backend-only batch. Keep changes additive and contract-compatible.
 
 ## Result writeback
 

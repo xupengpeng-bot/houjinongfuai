@@ -10,6 +10,13 @@ export interface ProjectOverviewDto {
   running_session_count: number;
   open_alert_count: number;
   open_work_order_count: number;
+  /** COD-032: additive aliases for frontend cockpit cards (LVB-4025/4026) */
+  well_count: number;
+  device_count: number;
+  running_wells: number;
+  today_usage_m3: number;
+  today_revenue_yuan: number;
+  pending_alerts: number;
 }
 
 export interface BlockCockpitRowDto {
@@ -62,7 +69,31 @@ class CockpitOpsController {
           select count(*)::int
           from work_order
           where status in ('created', 'assigned', 'in_progress')
-        ) as open_work_order_count
+        ) as open_work_order_count,
+        (select count(*)::int from well) as well_count,
+        (select count(*)::int from device) as device_count,
+        (
+          select count(distinct well_id)::int
+          from runtime_session
+          where status in ('pending_start', 'running', 'billing', 'stopping')
+        ) as running_wells,
+        coalesce((
+          select sum(coalesce(io.charge_volume, 0))::numeric
+          from irrigation_order io
+          where (io.created_at at time zone 'Asia/Shanghai')::date =
+            (current_timestamp at time zone 'Asia/Shanghai')::date
+        ), 0)::float8 as today_usage_m3,
+        coalesce((
+          select sum(io.amount)::numeric
+          from irrigation_order io
+          where (io.created_at at time zone 'Asia/Shanghai')::date =
+            (current_timestamp at time zone 'Asia/Shanghai')::date
+        ), 0)::float8 as today_revenue_yuan,
+        (
+          select count(*)::int
+          from alarm_event
+          where status in ('open', 'processing')
+        ) as pending_alerts
     `);
     const row = result.rows[0];
     return ok(row);
@@ -72,7 +103,7 @@ class CockpitOpsController {
   async blockCockpit(
     @Query('project_id') projectId?: string,
     @Query('q') q?: string
-  ): Promise<ReturnType<typeof ok<{ items: BlockCockpitRowDto[] }>>> {
+  ): Promise<ReturnType<typeof ok<{ items: BlockCockpitRowDto[]; total: number }>>> {
     const params: unknown[] = [];
     let idx = 1;
     let projectFilter = '';
@@ -151,7 +182,8 @@ class CockpitOpsController {
       params
     );
 
-    return ok({ items: result.rows });
+    const items = result.rows;
+    return ok({ items, total: items.length });
   }
 }
 
