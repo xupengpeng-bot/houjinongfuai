@@ -81,7 +81,7 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Build the first backend aggregation batch for automatic scheduling and cost-finance so the next frontend wave can wire both domains in one shot.
+- Wait for PM to set **`active task`** and refresh **`Execute now`** here. Last closed backend batch: **`COD-2026-03-27-013`**（`ops/auto-scheduling`、`ops/cost-finance`）。
 
 ## Hard constraints
 
