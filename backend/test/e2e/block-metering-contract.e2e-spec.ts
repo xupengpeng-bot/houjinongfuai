@@ -104,4 +104,38 @@ describeOrSkip('project block + metering point contract (COD-2026-03-26-015 / 01
     expect(typeof d.total).toBe('number');
     expect(d.total).toBe(d.items?.length ?? 0);
   });
+
+  it('COD-2026-03-27-002: ops/run-monitor, alert-center, history-replay aggregates', async () => {
+    const rm = await request(app.getHttpServer()).get('/api/v1/ops/run-monitor').expect(200);
+    const rmd = (rm.body as { data?: Record<string, unknown> }).data ?? rm.body;
+    expect(rmd).toMatchObject({
+      running_session_count: expect.any(Number),
+      running_well_count: expect.any(Number),
+      online_device_count: expect.any(Number),
+      today_usage_m3: expect.any(Number)
+    });
+    expect(Array.isArray(rmd.recent_sessions)).toBe(true);
+
+    const ac = await request(app.getHttpServer()).get('/api/v1/ops/alert-center').expect(200);
+    const acd = (ac.body as { data?: Record<string, unknown> }).data ?? ac.body;
+    expect(acd).toMatchObject({
+      open_count: expect.any(Number),
+      processing_count: expect.any(Number),
+      closed_count: expect.any(Number),
+      severity_counts: expect.objectContaining({
+        low: expect.any(Number),
+        medium: expect.any(Number),
+        high: expect.any(Number),
+        critical: expect.any(Number)
+      })
+    });
+    expect(Array.isArray(acd.recent_alerts)).toBe(true);
+
+    const hr = await request(app.getHttpServer()).get('/api/v1/ops/history-replay').expect(200);
+    const hrd = (hr.body as { data?: Record<string, unknown> }).data ?? hr.body;
+    expect(hrd.time_range).toMatchObject({ from: expect.any(String), to: expect.any(String) });
+    expect(hrd.filter).toMatchObject({ project_id: null, block_id: null });
+    expect(typeof hrd.total).toBe('number');
+    expect(Array.isArray(hrd.sessions)).toBe(true);
+  });
 });
