@@ -34,7 +34,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-26-025` fixed — `LVB-4024` handoff synced to frontend Git `main`
   - `COD-2026-03-26-026` fixed — `LVB-4024` local acceptance passed
   - `COD-2026-03-26-027` fixed — cockpit backend aggregation first batch completed
-  - `COD-2026-03-26-028` fixed — `LVB-4025` handoff pushed to frontend Git `main` at `0cc0d8e…`
+  - `COD-2026-03-26-028` fixed — `LVB-4025` handoff synced to frontend Git `main`
+  - `COD-2026-03-26-029` partial — `LVB-4025` local VERIFY: `main` `f822fce…`，build OK；mock 壳层通过；**real** 与 `COD-027` 字段/路径未对齐（见 `docs/codex/RESULT.md`）
 - active task
   - none
 
@@ -51,7 +52,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 5. `docs/governance/file-only-command-protocol.md`
 6. `docs/governance/delivery-workflow.md`
 7. `docs/governance/current-wave-2026-03-24.md`
-8. 最新 `docs/codex/COD-*` 任务文件（若 PM 有下发）
+8. `docs/codex/COD-2026-03-26-029_LVB-4025前端本地验收任务.md`
 9. `docs/codex/RESULT.md`
 
 ## Allowed working area
@@ -68,8 +69,8 @@ Do not modify other directories unless PM updates this file.
 ## Hard constraints
 
 - Do not reopen architecture.
-- Do not modify frontend business code.
-- Sync only the files explicitly listed in the task file.
+- Do not modify frontend business code during this verification task.
+- If local frontend HEAD is behind `origin/main` or the working tree is dirty, do not issue a final negative conclusion until the hard gate is satisfied.
 
 ## Result writeback
 
