@@ -53,7 +53,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - **壳层 / 中文**：三页均有 loading / empty / error；枚举展示经 **`Record` → 中文**（内部 key 仍为英文，**非用户可见直出**）。
 - commit SHA or `no git action`
   - 验收基准前端 **`main`**：**`80a726815f3e07ebb5383ae13906060bcf59770d`**
-  - **`houjinongfuai`** 文档回写：**`766e089`**（`Record COD-2026-03-27-006 VERIFY partial for LVB-4030`）
+  - **`houjinongfuai`**：`docs/codex` 回写已入库（`CURRENT.md`、`RESULT.md`、`COD-006` 任务单关闭）
 - frontend impact
   - 需在 **`cockpit.ts`**（或等价层）为 **RunMonitor / AlertCenter / HistoryReplay** 增加 **后端行 → 前端展示行** 的映射，或 **收紧前端类型与页面** 与 **`RunMonitorDto` / `AlertCenterDto` / `HistoryReplayDto`** 一致；**AlertCenter** 需统一 **`severity_counts`** 分桶口径。
 - pending issues
