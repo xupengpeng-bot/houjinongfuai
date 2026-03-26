@@ -39,7 +39,7 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - **`npm run build`**：**通过**
   - **`npx jest --config ./test/jest-e2e.json --runInBand test/e2e/view-contract.e2e-spec.ts -t "COD-2026-03-27-013"`**：**通过**
 - commit SHA or `no git action`
-  - **`a1475f8`**（`feat(cockpit): add ops auto-scheduling and cost-finance aggregates (COD-2026-03-27-013)`）
+  - **`569be8c`**（`feat(cockpit): add ops auto-scheduling and cost-finance aggregates (COD-2026-03-27-013)`）
 - frontend impact
   - **无前端业务代码变更**。下一波可对接两接口字段（见下）。
 - pending issues
