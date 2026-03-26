@@ -47,7 +47,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-004` partial `LVB-4029` VERIFY: DTO shape mismatch against backend `COD-2026-03-27-002`
   - `COD-2026-03-27-005` fixed `LVB-4030` handoff synced to frontend Git `main`
   - `COD-2026-03-27-006` partial `LVB-4030` VERIFY: row-level DTO mismatch remains on three cockpit pages
-  - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main` at `8c0a966eb54a3e21921f3b27eb707c487e404145`
+  - `COD-2026-03-27-007` fixed `LVB-4031` handoff synced to frontend Git `main`
+  - `COD-2026-03-27-008` partial `LVB-4031` VERIFY：已对齐 `started_at` 与 `severity_counts` 四桶；**`AlertCenter` 行 / `HistoryReplay` 行等仍与后端行级 DTO 不一致**（见 `RESULT.md`）
 - active task
   - none
 
