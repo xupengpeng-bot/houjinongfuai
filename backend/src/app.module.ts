@@ -27,6 +27,7 @@ import { ProjectBlockModule } from './modules/project-block/project-block.module
 import { MeteringPointModule } from './modules/metering-point/metering-point.module';
 import { DeviceRelationsModule } from './modules/device-relations/device-relations.module';
 import { DispatchMysqlModule } from './modules/dispatch-mysql/dispatch-mysql.module';
+import { SolverModule } from './modules/solver/solver.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { DispatchMysqlModule } from './modules/dispatch-mysql/dispatch-mysql.mod
     MeteringPointModule,
     DeviceRelationsModule,
     DispatchMysqlModule,
+    SolverModule,
     AlarmModule,
     WorkOrderModule,
     UatModule,

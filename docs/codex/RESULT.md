@@ -22,31 +22,35 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-034`（dispatch 任务编排：顺序字段 + 安全激活下一任务）
+  - `COD-2026-03-27-035`（泵阀拓扑 V1 对齐 + solver 读模型）
 - mode
   - **`BACKEND`**
 - status
   - **`fixed`**
 - changed files / synced files
-  - **`backend/sql/dispatch-mysql/002_dispatch_task_sequencing.sql`**（**`next_task_id`**、**`depends_on_task_id`**、**`queue_order`** + 索引；已在 demeter dispatch RDS 执行）
-  - **`backend/sql/dispatch-mysql/README.md`**
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.dto.ts`**（**`auto_activate_next`**、**`DispatchTaskSequencingBodyDto`**、**`DISPATCH_TASK_ACTIVATABLE_STATUSES`**）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.service.ts`**（**`updateTaskSequencing`**、链式 **`closed` + `auto_activate_next`** 事务）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.module.ts`**（**`POST .../sequencing`**）
-  - **`backend/src/modules/dispatch-mysql/dispatch-task-read-model.ts`**（读模型带出编排字段）
-  - **`backend/test/unit/dispatch-task-read-model.spec.ts`**
-  - **`docs/codex/RESULT.md`**
+  - **`backend/sql/migrations/019_pump_valve_topology_relation_type_state.sql`**（**`pump_valve_relation.topology_relation_type_state`** jsonb）
+  - **`backend/src/modules/topology/topology-relation-type-v1.ts`**（与 **`DeviceRelationsService.relationTypeOptions`** 同枚举；**`resolveEffectiveTopologyRelationTypeV1`**）
+  - **`backend/src/modules/topology/topology.dto.ts`** / **`topology.repository.ts`** / **`topology.module.ts`**
+  - **`backend/src/modules/solver/solver.dto.ts`**（**`SOLVER_CONTRACT_VERSION=solver-v1-topology-network`**；可选 **`network_model_version_id`**、**`pump_valve_relation_id`**）
+  - **`backend/src/modules/solver/solver.service.ts`**（**`readModel`**：`networkModelVersion` / `pumpValveTopology`）
+  - **`backend/src/app.module.ts`**（注册 **`SolverModule`**）
+  - **`backend/test/unit/topology-relation-type-v1.spec.ts`**
+  - **`backend/test/e2e/solver-contract.e2e-spec.ts`**
+  - **`docs/codex/RESULT.md`**、**`docs/codex/CURRENT.md`**
 - migration or contract summary
-  - **MySQL** **`dispatch_task`** 增加三列（仅 additive）；**`POST /dispatch/task/:id/sequencing`** 写入编排；**`POST /dispatch/task/:id/status`** 在 **`status: closed`** 且 **`auto_activate_next: true`** 时在同一事务内：关闭当前任务、清空团队 idle，再将 **`next_task_id`** 指向的任务置为 **`active`** 并写回 **`dispatch_team_current`**（下一任务须为 **`synced_ready`** 或 **`draft_local_only`**，同 **`team`**，且 **`depends_on_task_id`** 若存在则依赖任务须已 **`closed`**）。
+  - **Postgres**：**`topology_relation_type_state`** 存 **`manual` / `reported` / `effective`**（值域为 V1 六枚举）；解析顺序 **effective → manual → reported → `sequence_delayed`**。
+  - **`GET/POST/PATCH /pump-valve-relations`** 列表项增加 **`topologyRelationTypeState`**、**`topologyRelationTypeEffective`**。
+  - **`POST /ops/solver/preview`**、**`plan`** 响应增加 **`readModel`**；传入 UUID 时回填 **`network_model_version`** 行或 **`pump_valve_relation`** 拓扑上下文（内核仍为 stub）。
 - verification result
   - **`npm run build`**：**通过**
-  - **`npm run test:unit`**：**通过**（18 tests）
+  - **`npm run test:unit`**：**通过**（20 tests）
+  - **`solver-contract` e2e**：**通过**
 - commit SHA or `no git action`
   - 见本回合 `git log -1`
 - frontend impact
-  - 无
+  - 无业务页修改；契约：**`contractVersion`** 变更；泵阀列表字段扩展
 - pending issues
-  - 全自动化编排与 **`queue_order`** 调度未做；仅显式链式激活
-  - 其他环境若未跑 **`002`**，**`sequencing`** 写会 **503**（提示补 SQL）
+  - 本地需执行 **`019`** migration（本机无 **`psql`** 时由 DBA/CI 执行）
+  - 派单 MySQL **`COD-2026-03-27-035`** 行需 PM 用写接口或手工收口
 - next handoff target
-  - PM 用 **`sequencing`** 接线后，用 **`status` + `auto_activate_next`** 收口任务切换；或派 **`COD`** 做审计与回滚记录
+  - 前端可选展示 **`topologyRelationTypeEffective`**；solver 真内核仍待后续 **`COD`**

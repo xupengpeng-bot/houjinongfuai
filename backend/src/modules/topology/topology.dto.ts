@@ -1,5 +1,28 @@
-import { IsIn, IsOptional, IsString } from 'class-validator';
+import { IsIn, IsOptional, IsString, ValidateNested } from 'class-validator';
+import { Type } from 'class-transformer';
 import { BlockingReason } from '../../common/contracts/runtime-decision';
+import {
+  TOPOLOGY_RELATION_TYPE_V1,
+  type TopologyRelationTypeV1
+} from './topology-relation-type-v1';
+
+const RELATION_ROLE = ['primary', 'backup', 'forbidden'] as const;
+const TOPOLOGY_V1_LIST = [...TOPOLOGY_RELATION_TYPE_V1] as string[];
+
+/** Manual / reported / effective layers; `effective` is canonical for solver when set. */
+export class TopologyRelationTypeStateBodyDto {
+  @IsOptional()
+  @IsIn(TOPOLOGY_V1_LIST)
+  manual?: TopologyRelationTypeV1;
+
+  @IsOptional()
+  @IsIn(TOPOLOGY_V1_LIST)
+  reported?: TopologyRelationTypeV1;
+
+  @IsOptional()
+  @IsIn(TOPOLOGY_V1_LIST)
+  effective?: TopologyRelationTypeV1;
+}
 
 export class PumpValveRelationDto {
   @IsString()
@@ -11,14 +34,24 @@ export class PumpValveRelationDto {
   @IsString()
   valveId!: string;
 
-  @IsIn(['primary', 'backup', 'forbidden'])
+  @IsIn(RELATION_ROLE)
   relationRole!: 'primary' | 'backup' | 'forbidden';
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TopologyRelationTypeStateBodyDto)
+  topology_relation_types?: TopologyRelationTypeStateBodyDto;
 }
 
 export class UpdatePumpValveRelationDto {
   @IsOptional()
-  @IsIn(['primary', 'backup', 'forbidden'])
+  @IsIn(RELATION_ROLE)
   relationRole?: 'primary' | 'backup' | 'forbidden';
+
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => TopologyRelationTypeStateBodyDto)
+  topology_relation_types?: TopologyRelationTypeStateBodyDto;
 }
 
 export interface RelationContext {

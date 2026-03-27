@@ -15,12 +15,30 @@ class TopologyController {
 
   @Post()
   async create(@Body() dto: PumpValveRelationDto) {
-    return ok({ created: await this.topologyRepository.create(dto) });
+    return ok({
+      created: await this.topologyRepository.create({
+        wellId: dto.wellId,
+        pumpId: dto.pumpId,
+        valveId: dto.valveId,
+        relationRole: dto.relationRole,
+        topologyRelationTypeState: dto.topology_relation_types
+          ? { ...dto.topology_relation_types }
+          : undefined
+      })
+    });
   }
 
   @Patch(':id')
   async update(@Param('id') id: string, @Body() dto: UpdatePumpValveRelationDto) {
-    return ok({ id, updated: await this.topologyRepository.update(id, dto) });
+    return ok({
+      id,
+      updated: await this.topologyRepository.update(id, {
+        relationRole: dto.relationRole,
+        topologyRelationTypeStatePatch: dto.topology_relation_types
+          ? { ...dto.topology_relation_types }
+          : undefined
+      })
+    });
   }
 }
 
