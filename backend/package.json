@@ -22,15 +22,17 @@
     "testdata:cleanup": "ts-node ./scripts/cleanup-test-data.ts",
     "region-reference:import": "ts-node ./scripts/import-region-reference.ts",
     "region-reference:verify": "ts-node ./scripts/verify-region-reference.ts",
-    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand"
+    "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
+    "test:unit": "jest --config ./test/jest-unit.json --runInBand"
   },
   "dependencies": {
-    "@nestjs/config": "^4.0.2",
     "@nestjs/common": "^11.0.0",
+    "@nestjs/config": "^4.0.2",
     "@nestjs/core": "^11.0.0",
     "@nestjs/platform-express": "^11.0.0",
     "class-transformer": "^0.5.1",
     "class-validator": "^0.14.2",
+    "mysql2": "^3.14.0",
     "pg": "^8.14.1",
     "reflect-metadata": "^0.2.2",
     "rxjs": "^7.8.1"
@@ -40,6 +42,7 @@
     "@nestjs/testing": "^11.0.0",
     "@types/express": "^5.0.1",
     "@types/jest": "^30.0.0",
+    "@types/node": "^22.10.0",
     "@types/pg": "^8.11.11",
     "@types/supertest": "^6.0.3",
     "jest": "^30.0.5",
@@ -48,7 +51,6 @@
     "ts-loader": "^9.5.1",
     "ts-node": "^10.9.2",
     "tsconfig-paths": "^4.2.0",
-    "@types/node": "^22.10.0",
     "typescript": "^5.7.0"
   }
 }

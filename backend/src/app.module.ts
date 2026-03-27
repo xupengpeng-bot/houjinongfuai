@@ -25,6 +25,8 @@ import { CockpitModule } from './modules/cockpit/cockpit.module';
 import { MaintenanceTeamModule } from './modules/maintenance-team/maintenance-team.module';
 import { ProjectBlockModule } from './modules/project-block/project-block.module';
 import { MeteringPointModule } from './modules/metering-point/metering-point.module';
+import { DeviceRelationsModule } from './modules/device-relations/device-relations.module';
+import { DispatchMysqlModule } from './modules/dispatch-mysql/dispatch-mysql.module';
 
 @Module({
   imports: [
@@ -53,6 +55,8 @@ import { MeteringPointModule } from './modules/metering-point/metering-point.mod
     MaintenanceTeamModule,
     ProjectBlockModule,
     MeteringPointModule,
+    DeviceRelationsModule,
+    DispatchMysqlModule,
     AlarmModule,
     WorkOrderModule,
     UatModule,
