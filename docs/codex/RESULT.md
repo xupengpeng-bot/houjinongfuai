@@ -42,7 +42,8 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - 前端 **`git push origin main`**：**成功**（**`92e9e2c..a135cc7`**）
   - **`origin/main`** 已包含上述 6 个路径；工作区仍存在未跟踪的 **`.env`**（未纳入提交，符合约束）
 - commit SHA or `no git action`
-  - 前端 **`a135cc7`**（**`Sync LVB-4038 handoff package (COD-2026-03-27-027)`**）；后端文档以本仓库下一笔提交为准
+  - 前端 **`a135cc7`**（**`Sync LVB-4038 handoff package (COD-2026-03-27-027)`**）
+  - 后端文档仓库 **`3062f22`**（**`docs(codex): close COD-2026-03-27-027 LVB-4038 handoff sync (frontend a135cc7)`**）
 - frontend impact
   - **`WAVE.md`**：**`LVB-4037`** → **`closed`**；**`LVB-4038`** → **`synced_ready`**
   - Lovable 可按 **`lovablecomhis/CURRENT.md`** 执行 **`LVB-4038`** 整批接线（依赖后端 **`/api/v1`** 设备域路由；环境需已应用迁移 **`018`**）
