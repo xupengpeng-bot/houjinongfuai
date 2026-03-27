@@ -58,7 +58,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-015` fixed `LVB-4034` handoff pushed to frontend Git `origin/main` at `8becb20`
   - `COD-2026-03-27-016` partial `LVB-4034` VERIFY at frontend Git `HEAD` `5fe2f01`
   - `COD-2026-03-27-017` fixed `LVB-4035` handoff synced to frontend Git `origin/main` at `781a747`
-  - `COD-2026-03-27-018` failed `LVB-4035` VERIFY at local frontend `HEAD` `781a747`（明细行 DTO 未实现；`git pull` 失败）
+  - `COD-2026-03-27-018` failed `LVB-4035` VERIFY at local frontend `HEAD` `781a747`
+  - `COD-2026-03-27-019` fixed `LVB-4035` VERIFY passed at frontend Git `HEAD` `03b9235`
 - active task
   - none
 
@@ -86,7 +87,7 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM / Lovable：**`LVB-4035`** **`src`** 实现后再验收或新派单。上一验收：**`COD-2026-03-27-018`** **未通过**。
+- Wait for PM to set **`active task`**。上一验收：**`COD-2026-03-27-019`**（**`LVB-4035`** **通过**，基准 **`03b9235`**）。
 
 ## Hard constraints
 
