@@ -22,34 +22,38 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-032`（dispatch 热路径结构化 + 读模型）
+  - `COD-2026-03-27-033`（dispatch 安全写接口）
 - mode
   - **`BACKEND`**
 - status
   - **`fixed`**
 - changed files / synced files
-  - **`backend/sql/dispatch-mysql/001_dispatch_task_hotpath.sql`**（**`summary_json`**、**`artifact_ref`**，**additive**）
-  - **`backend/sql/dispatch-mysql/README.md`**
-  - **`backend/src/modules/dispatch-mysql/dispatch-task-read-model.ts`**（**`buildDispatchTaskReadModel`** / **`parseSummaryJson`**）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.service.ts`**（**`getTaskReadModel()`**）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.module.ts`**（**`GET /dispatch/task/:taskId/state`**）
-  - **`backend/test/unit/dispatch-task-read-model.spec.ts`**
+  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.dto.ts`**（**`status`** / **`result-summary`** 请求体）
+  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.service.ts`**（**`updateTaskStatus`**、**`updateTaskResultSummary`**、**`assertWriteHeaders`**）
+  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.module.ts`**（**`POST`** 路由）
+  - **`backend/src/main.ts`**（CORS **`X-Dispatch-Write-Key`**）
+  - **`backend/.env.example`**（**`DISPATCH_DB_WRITE_ENABLED`**、**`DISPATCH_WRITE_KEY`**）
+  - **`backend/sql/dispatch-mysql/README.md`**（写接口索引）
   - **`docs/codex/RESULT.md`**
 - migration or contract summary
-  - **MySQL** `dispatch_task` 新增两列：**`summary_json`**（JSON）、**`artifact_ref`**（`varchar(512)`）。需在 RDS 上**手工执行** SQL 补丁（见 **`backend/sql/dispatch-mysql/`**）；未在本机对 RDS 执行。
+  - **无新 migration**；**`result-summary`** 依赖 **`001_dispatch_task_hotpath.sql`** 已应用（否则 **503** 提示缺列）。
 - verification result
   - **`npm run build`**：**通过**
   - **`npm run test:unit`**：**通过**（17 tests）
-- route / read-model summary（前缀 **`/api/v1`**）
-  - **`GET /dispatch/task/:taskId/state`** — 返回 **热路径读模型**：`summary`（来自 **`summary_json`**）、标量字段、**`artifact_ref`**；仅当 **`summary_json` 为空**时附带 **`payload_md_legacy`**（长文 fallback）
-  - **`GET /dispatch/task/:taskId`** — 仍为 **原始行**（**`SELECT *`**），兼容旧调用方
-  - **`GET /dispatch/team/:team/current`** — 不变
+- **state-transition rules**（**`POST /dispatch/task/:taskId/status`**）
+  - **`status`** 仅允许白名单：**`active`** | **`waiting_verify`** | **`closed`** | **`paused`** | **`blocked`** | **`draft_local_only`** | **`synced_ready`**
+  - **`sync_team`**（默认 **true**）：若 **`dispatch_team_current.active_task_id`** 等于当前 **`task_id`**，则  
+    - **`closed`** → 团队行 **`active_task_id=NULL`**，**`status=idle`**，**`work_mode=IDLE`**  
+    - **`waiting_verify`** → 团队行 **`status=waiting_verify`**，**`work_mode=VERIFY`**
+- **write route summary**（前缀 **`/api/v1`**，需 **`DISPATCH_DB_WRITE_ENABLED=true`**；可选 **`DISPATCH_WRITE_KEY`** + 请求头 **`X-Dispatch-Write-Key`**）
+  - **`POST /dispatch/task/:taskId/status`** body：**`{ status, sync_team? }`** → **`ok({ task, team })`**
+  - **`POST /dispatch/task/:taskId/result-summary`** body：**`{ summary, artifact_ref? }`** → **`ok`** 读模型（**`updateTaskResultSummary`**）
 - commit SHA or `no git action`
   - 见本回合 `git log -1`
 - frontend impact
-  - 执行器可改调 **`GET .../task/:id/state`** 以避开大段 **`payload_md`**
+  - 无直接改前端业务页；仅 CORS 增加写头
 - pending issues
-  - RDS 需执行 **`001_dispatch_task_hotpath.sql`**；若列已存在会报错，需 DBA 跳过或改判
-  - 向 **`summary_json`** 写入规范内容（PM/工具）尚未自动化；**`payload_md`** 仍保留
+  - 生产环境务必配置 **`DISPATCH_WRITE_KEY`** 并限制来源网络
+  - **`status` 白名单**若与 PM 枚举不一致，可再扩列（仅允许 additive）
 - next handoff target
-  - 在 **`dispatch_task`** 中填充 **`summary_json`** 与 **`artifact_ref`**；或派 **`COD`** 做写入工具与校验
+  - 在 RDS 应用 **`001`** 后，对 **`result-summary`** 做冒烟；或 **`COD`** 接审计日志

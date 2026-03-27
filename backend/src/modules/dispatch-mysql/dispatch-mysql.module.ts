@@ -1,10 +1,35 @@
-import { Controller, Get, Module, NotFoundException, Param } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Module, NotFoundException, Param, Post } from '@nestjs/common';
+import type { IncomingHttpHeaders } from 'http';
 import { ok } from '../../common/http/api-response';
+import { DispatchTaskResultSummaryBodyDto, DispatchTaskStatusBodyDto } from './dispatch-mysql.dto';
 import { DispatchMysqlService } from './dispatch-mysql.service';
 
 @Controller('dispatch')
 class DispatchMysqlController {
   constructor(private readonly dispatch: DispatchMysqlService) {}
+
+  @Post('task/:taskId/status')
+  async postTaskStatus(
+    @Param('taskId') taskId: string,
+    @Body() body: DispatchTaskStatusBodyDto,
+    @Headers() headers: IncomingHttpHeaders
+  ) {
+    this.dispatch.assertWriteHeaders(headers);
+    const syncTeam = body.sync_team !== false;
+    const { task, team } = await this.dispatch.updateTaskStatus(taskId, body.status, syncTeam);
+    return ok({ task, team });
+  }
+
+  @Post('task/:taskId/result-summary')
+  async postResultSummary(
+    @Param('taskId') taskId: string,
+    @Body() body: DispatchTaskResultSummaryBodyDto,
+    @Headers() headers: IncomingHttpHeaders
+  ) {
+    this.dispatch.assertWriteHeaders(headers);
+    const model = await this.dispatch.updateTaskResultSummary(taskId, body.summary, body.artifact_ref);
+    return ok(model);
+  }
 
   @Get('team/:team/current')
   async teamCurrent(@Param('team') team: string) {
