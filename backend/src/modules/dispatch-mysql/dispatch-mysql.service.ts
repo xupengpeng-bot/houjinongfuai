@@ -2,6 +2,7 @@ import { Injectable, OnModuleDestroy, ServiceUnavailableException } from '@nestj
 import { ConfigService } from '@nestjs/config';
 import type { Pool, RowDataPacket } from 'mysql2/promise';
 import { createPool } from 'mysql2/promise';
+import { buildDispatchTaskReadModel, type DispatchTaskReadModel } from './dispatch-task-read-model';
 
 /**
  * Read-only access to MySQL `dispatch_*` tables (separate from main Postgres `DATABASE_URL`).
@@ -64,6 +65,15 @@ export class DispatchMysqlService implements OnModuleDestroy {
       [taskId]
     );
     return rows[0] ?? null;
+  }
+
+  /**
+   * Hot-path read model: prefers `summary_json` + scalars; includes `payload_md_legacy` only when no summary.
+   */
+  async getTaskReadModel(taskId: string): Promise<DispatchTaskReadModel | null> {
+    const row = await this.getTask(taskId);
+    if (!row) return null;
+    return buildDispatchTaskReadModel(row);
   }
 
   async onModuleDestroy(): Promise<void> {

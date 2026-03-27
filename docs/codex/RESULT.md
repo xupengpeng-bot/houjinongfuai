@@ -22,35 +22,34 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-031`（dispatch MySQL 共享层 / 只读 API）
+  - `COD-2026-03-27-032`（dispatch 热路径结构化 + 读模型）
 - mode
   - **`BACKEND`**
 - status
   - **`fixed`**
 - changed files / synced files
-  - **`backend/package.json`**、**`package-lock.json`**（依赖 **`mysql2`**）
-  - **`backend/.env.example`**（**`DISPATCH_DB_*`** 说明）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.service.ts`**（**`utf8mb4`** 连接池；**`dispatch_team_current`** / **`dispatch_task`** 只读）
-  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.module.ts`**（路由）
-  - **`backend/src/app.module.ts`**（注册 **`DispatchMysqlModule`**）
-  - **`backend/test/unit/dispatch-mysql.service.spec.ts`**
+  - **`backend/sql/dispatch-mysql/001_dispatch_task_hotpath.sql`**（**`summary_json`**、**`artifact_ref`**，**additive**）
+  - **`backend/sql/dispatch-mysql/README.md`**
+  - **`backend/src/modules/dispatch-mysql/dispatch-task-read-model.ts`**（**`buildDispatchTaskReadModel`** / **`parseSummaryJson`**）
+  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.service.ts`**（**`getTaskReadModel()`**）
+  - **`backend/src/modules/dispatch-mysql/dispatch-mysql.module.ts`**（**`GET /dispatch/task/:taskId/state`**）
+  - **`backend/test/unit/dispatch-task-read-model.spec.ts`**
   - **`docs/codex/RESULT.md`**
 - migration or contract summary
-  - **无**；与主业务 **Postgres** 并行，仅可选连接 **MySQL** `demeter-dev-v2`。
+  - **MySQL** `dispatch_task` 新增两列：**`summary_json`**（JSON）、**`artifact_ref`**（`varchar(512)`）。需在 RDS 上**手工执行** SQL 补丁（见 **`backend/sql/dispatch-mysql/`**）；未在本机对 RDS 执行。
 - verification result
   - **`npm run build`**：**通过**
-  - **`npm run test:unit`**：**通过**（14 tests）
-- route / contract summary（前缀 **`/api/v1`**，与现有 **`ok()`** 信封一致）
-  - **`GET /dispatch/team/:team/current`** → **`dispatch_team_current`** 一行；无行 → **404**
-  - **`GET /dispatch/task/:taskId`** → **`dispatch_task`** 一行；无行 → **404**
-  - 未配置 **`DISPATCH_DB_ENABLED=true`** 或缺少 host → **503**（**`ServiceUnavailableException`**）
+  - **`npm run test:unit`**：**通过**（17 tests）
+- route / read-model summary（前缀 **`/api/v1`**）
+  - **`GET /dispatch/task/:taskId/state`** — 返回 **热路径读模型**：`summary`（来自 **`summary_json`**）、标量字段、**`artifact_ref`**；仅当 **`summary_json` 为空**时附带 **`payload_md_legacy`**（长文 fallback）
+  - **`GET /dispatch/task/:taskId`** — 仍为 **原始行**（**`SELECT *`**），兼容旧调用方
+  - **`GET /dispatch/team/:team/current`** — 不变
 - commit SHA or `no git action`
-  - 见本回合 `git log -1`（含 **`feat(backend)`** 或 **`dispatch`** 说明）
+  - 见本回合 `git log -1`
 - frontend impact
-  - 可选：执行器/工具通过 **`fetch('/api/v1/dispatch/...')`** 读 dispatch 状态，替代本地直连 MySQL（需配置后端 `.env`）
+  - 执行器可改调 **`GET .../task/:id/state`** 以避开大段 **`payload_md`**
 - pending issues
-  - **写路径**（**`POST`/`PATCH`** 更新 **`dispatch_team_current`**）本批未做；需 **`DISPATCH_DB_WRITE_ENABLED`** + 鉴权 + PM 规则后再开
-  - 生产环境建议：**内网**、**`X-Internal-*` 密钥** 或网关 ACL
-  - **密码**仅通过环境变量注入，**不提交**到 Git
+  - RDS 需执行 **`001_dispatch_task_hotpath.sql`**；若列已存在会报错，需 DBA 跳过或改判
+  - 向 **`summary_json`** 写入规范内容（PM/工具）尚未自动化；**`payload_md`** 仍保留
 - next handoff target
-  - 在部署环境配置 **`DISPATCH_DB_*`** 后冒烟；或 **`COD`** 增加 **dispatch 写接口** 与审计
+  - 在 **`dispatch_task`** 中填充 **`summary_json`** 与 **`artifact_ref`**；或派 **`COD`** 做写入工具与校验
