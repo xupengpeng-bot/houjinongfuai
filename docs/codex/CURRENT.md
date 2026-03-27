@@ -60,6 +60,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-017` fixed `LVB-4035` handoff synced to frontend Git `origin/main` at `781a747`
   - `COD-2026-03-27-018` failed `LVB-4035` VERIFY at local frontend `HEAD` `781a747`
   - `COD-2026-03-27-019` fixed `LVB-4035` VERIFY passed at frontend Git `HEAD` `03b9235`
+  - `COD-2026-03-27-020` fixed project/block data-scope backend batch (`/ops/data-scope/*`)
 - active task
   - none
 
@@ -87,13 +88,13 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一验收：**`COD-2026-03-27-019`**（**`LVB-4035`** **通过**，基准 **`03b9235`**）。
+- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-020`**（数据权限 **`/ops/data-scope/*`**）。
 
 ## Hard constraints
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Verify-only batch. Do not implement frontend code in this round.
+- Backend-only batch. Keep changes additive and contract-compatible.
 
 ## Result writeback
 

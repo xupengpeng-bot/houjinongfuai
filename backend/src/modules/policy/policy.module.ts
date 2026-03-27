@@ -1,5 +1,8 @@
 import { Body, Controller, Get, Module, Param, Patch, Post } from '@nestjs/common';
 import { ok } from '../../common/http/api-response';
+import { DataScopeController } from './data-scope.controller';
+import { DataScopeRepository } from './data-scope.repository';
+import { DataScopeService } from './data-scope.service';
 import { EffectivePolicyResolver } from './effective-policy.resolver';
 import { UpdateWellRuntimePolicyDto, WellRuntimePolicyDto } from './policy.dto';
 import { PolicyRepository } from './policy.repository';
@@ -43,8 +46,8 @@ class PolicyController {
 }
 
 @Module({
-  controllers: [PolicyController],
-  providers: [PolicyRepository, EffectivePolicyResolver],
-  exports: [PolicyRepository, EffectivePolicyResolver]
+  controllers: [PolicyController, DataScopeController],
+  providers: [PolicyRepository, EffectivePolicyResolver, DataScopeRepository, DataScopeService],
+  exports: [PolicyRepository, EffectivePolicyResolver, DataScopeRepository, DataScopeService]
 })
 export class PolicyModule {}
