@@ -50,11 +50,11 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - **壳层**：两页均有中文标题、加载 / 失败 / 空数据壳 ✓
 - commit SHA or `no git action`
   - **验收基准前端 `main`**：**`5fe2f010ffca0237a7497005614f7e42d7770884`**
+  - **`houjinongfuai`**：**`b379a30`**（`docs(codex): COD-2026-03-016 partial VERIFY LVB-4034 at frontend 5fe2f01`）；**`git push origin main`**：**成功**
 - frontend impact
   - **`LVB-4034`** 已在远端 **`main`**（本拉取包含实现提交）；**完整契约对齐**需后续 **`normalize*`** 与表格列映射修补（不在本验收任务修改 `src` 范围内）。
 - pending issues
   - 行级 DTO 与 **`COD-013`** 对齐（或后端兼容别名）后再做 **`VERIFY` 收口**。
-  - **`houjinongfuai`**：`git push origin main` 若仍失败，恢复网络后推送文档提交。
 - next handoff target
   - PM：**下一单**做 **`LVB-4034`** 行级 DTO 纠偏或后端兼容层；或宣布仅聚合达标即关闭（产品决策）。
 
