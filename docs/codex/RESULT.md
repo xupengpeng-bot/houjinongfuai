@@ -22,33 +22,32 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-027`（前端 `LVB-4038` 任务包同步到 Git 主线）
+  - `COD-2026-03-27-028`（`LVB-4038` 前端本地验收）
 - mode
-  - **`SYNC`**
+  - **`VERIFY`**
 - status
   - **`fixed`**
 - changed files / synced files
-  - 前端仓库（**`D:\20251211\zhinengti\lovable`**）仅纳入任务卡允许的 6 个 handoff 文件（未包含 **`src/`**、**`.env`**、**`LOVABLE-PERMANENT-RULES.md`**）：
-    - **`lovablecomhis/CURRENT.md`**
-    - **`lovablecomhis/WAVE.md`**
-    - **`lovablecomhis/README.md`**
-    - **`lovablecomhis/LVB-4038-设备配置与设备关系真实接线整批.md`**
-    - **`lovablecomhis/context/LVB-4038-context.md`**
-    - **`lovablecomhis/fixtures/LVB-4038/README.md`**
-  - 后端文档仓库：**`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-027_前端LVB-4038任务包同步到Git主线任务.md`**
+  - 仅文档写回：**`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-028_LVB-4038前端本地验收任务.md`**（未改前端 **`src/`**）
 - migration or contract summary
-  - 无 DDL；同步内容为 **`LVB-4038`** 与后端 **`COD-2026-03-27-026`** 契约对齐说明（见 **`fixtures/LVB-4038/README.md`**）。
+  - 无；对照后端基线 **`COD-2026-03-27-026`**（`/api/v1` 下设备类型、设备台账、设备关系路由）。
 - verification result
-  - 前端 **`git push origin main`**：**成功**（**`92e9e2c..a135cc7`**）
-  - **`origin/main`** 已包含上述 6 个路径；工作区仍存在未跟踪的 **`.env`**（未纳入提交，符合约束）
+  - 前端仓库 **`D:\20251211\zhinengti\lovable`**：**`git pull origin main`** 后 **`HEAD`** == **`origin/main`** == **`d97474e`**
+  - **`npm run build`**（Vite）：**通过**（约 17.6s）
+  - 静态核对（**`isRealMode()`** 路径）：
+    - **`device-ledger.ts`**：`/devices`、`/device-types/options`、`/assets/options`、`/regions/options`
+    - **`device-relations.ts`**：`/device-relations` 与三条 **`…/options`** 路由
+    - **`device-type.ts`**：`/device-types` 及分类/通信标识选项路由（与设备类型页一致）
+    - 页面 **`DeviceLedger` / `DeviceRelations` / `DeviceTypes`**：列表与选项经 **`use-api-queries`** 走上述服务；**`DeviceFormDialog`** 使用传入的 **`deviceTypeOptions` / `assetOptions` / `regionOptions`**
+  - **`LVB-4038` 是否可关闭**：**可关闭**（构建与主链路接线满足任务目标；见下「待办」非阻塞项）
 - commit SHA or `no git action`
-  - 前端 **`a135cc7`**（**`Sync LVB-4038 handoff package (COD-2026-03-27-027)`**）
-  - 后端文档仓库 **`3062f22`**（**`docs(codex): close COD-2026-03-27-027…`**）；**`RESULT.md`** 补充前端 SHA 的提交为 **`6a35154`**
+  - 验收对象前端：**`d97474e`**（相对 **`027`** 同步点 **`a135cc7`** 含实现向提交，如关系列表与台账页调整）
+  - 本仓库文档写回：见 **`houjinongfuai`** 分支上 **`docs(codex): close COD-2026-03-27-028`** 提交（`git log -1 -- docs/codex/RESULT.md`）
 - frontend impact
-  - **`WAVE.md`**：**`LVB-4037`** → **`closed`**；**`LVB-4038`** → **`synced_ready`**
-  - Lovable 可按 **`lovablecomhis/CURRENT.md`** 执行 **`LVB-4038`** 整批接线（依赖后端 **`/api/v1`** 设备域路由；环境需已应用迁移 **`018`**）
+  - **`LVB-4038`** 可在 **`lovablecomhis/WAVE.md`** 中标记为 **`closed`**（由 PM 在前端仓库或下一 SYNC 更新）；本任务不修改 **`lovablecomhis/`**
 - pending issues
-  - **`LVB-4038`** 实现与 **`npm run build`** 验收由 Lovable / 本地 VERIFY 任务跟进
-  - 前端仓库根目录 **`.env`** 若需忽略，应由前端仓库维护 **`.gitignore`**（本次未改 **`src/`**）
+  - **`DeviceRelationFormDialog`** 中 **`deviceTypeCnMap`** 仍为设备类型码的辅助中文映射（主选项来自 **`o.label`**）；若后端选项已含完整展示名，可后续去掉映射
+  - **`sequence_rule`**、**`DeviceLedger`** 状态列等仍为页面内展示用常量，**`026`** 未要求对应后端选项路由
+  - 未在本地对真实后端做 **E2E** 冒烟（需 **`018`** 迁移与可用 API）
 - next handoff target
-  - Lovable 拉取 **`origin/main`** 后实现 **`LVB-4038`**；PM 可派 **`LVB-4038` VERIFY** 或下一 **`COD`** 任务
+  - PM：联调环境对 **`/api/v1`** 设备域跑一轮冒烟；或派发下一 **`COD`**
