@@ -22,32 +22,37 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-028`（`LVB-4038` 前端本地验收）
+  - `COD-2026-03-27-029`（设备配置与设备关系联调增强第二批）
 - mode
-  - **`VERIFY`**
+  - **`BACKEND`**
 - status
   - **`fixed`**
 - changed files / synced files
-  - 仅文档写回：**`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-028_LVB-4038前端本地验收任务.md`**（未改前端 **`src/`**）
+  - **`backend/src/modules/device-relations/device-relations.service.ts`**（关系类型选项改为中文 **`label`**，新增可选 **`description`**；新增 **`sequenceRuleOptions()`**）
+  - **`backend/src/modules/device-relations/device-relations.repository.ts`**（源/目标设备选项增加 **`device_type_code`**，_additive_）
+  - **`backend/src/modules/device-relations/device-relations.module.ts`**（**`GET /device-relations/sequence-rules/options`**）
+  - **`backend/src/modules/device-ledger/device-ledger.service.ts`**（**`displayStatusOptions`**、**`locationSourceStrategyOptions`**、**`commIdentityTypeOptions`**）
+  - **`backend/src/modules/device-ledger/device-ledger.module.ts`**（三条只读选项路由，见下）
+  - **`backend/test/unit/device-relations.service.spec.ts`**、**`backend/test/unit/device-ledger.service.spec.ts`**
+  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-029_设备配置与设备关系联调增强第二批任务.md`**（**`Status: closed`**）
 - migration or contract summary
-  - 无；对照后端基线 **`COD-2026-03-27-026`**（`/api/v1` 下设备类型、设备台账、设备关系路由）。
+  - **无新 migration**；均为 **`ok({ items })`** 信封下的只读选项与 DTO 扩展。
 - verification result
-  - 前端仓库 **`D:\20251211\zhinengti\lovable`**：**`git pull origin main`** 后 **`HEAD`** == **`origin/main`** == **`d97474e`**
-  - **`npm run build`**（Vite）：**通过**（约 17.6s）
-  - 静态核对（**`isRealMode()`** 路径）：
-    - **`device-ledger.ts`**：`/devices`、`/device-types/options`、`/assets/options`、`/regions/options`
-    - **`device-relations.ts`**：`/device-relations` 与三条 **`…/options`** 路由
-    - **`device-type.ts`**：`/device-types` 及分类/通信标识选项路由（与设备类型页一致）
-    - 页面 **`DeviceLedger` / `DeviceRelations` / `DeviceTypes`**：列表与选项经 **`use-api-queries`** 走上述服务；**`DeviceFormDialog`** 使用传入的 **`deviceTypeOptions` / `assetOptions` / `regionOptions`**
-  - **`LVB-4038` 是否可关闭**：**可关闭**（构建与主链路接线满足任务目标；见下「待办」非阻塞项）
+  - **`npm run build`**：**通过**
+  - **`npm run test:unit`**：**通过**（13 tests）
+- route / contract summary（前缀 **`/api/v1`**）
+  - **`GET /device-relations/relation-types/options`**：六项不变 **`value`**，**`label`** 为中文，每项多 **`description`**
+  - **`GET /device-relations/sequence-rules/options`**：**`source_first` | `target_first` | `simultaneous`** 与中文 **`label`**
+  - **`GET /device-relations/source-devices/options`**、**`…/target-devices/options`**：项内增加 **`device_type_code`**（**`type_code`** 来自 **`device_type`**）
+  - **`GET /devices/display-status/options`**：与台账列表派生 **`status`**（**`online` | `offline` | `alarm`**）一致
+  - **`GET /devices/location-source-strategies/options`**：与 **`ext_json.location_source_strategy`** 常用值一致
+  - **`GET /devices/comm-identity-types/options`**：与 **`ext_json.comm_identity_type`** 常用值一致
 - commit SHA or `no git action`
-  - 验收对象前端：**`d97474e`**（相对 **`027`** 同步点 **`a135cc7`** 含实现向提交，如关系列表与台账页调整）
-  - 本仓库文档写回：见 **`houjinongfuai`** 分支上 **`docs(codex): close COD-2026-03-27-028`** 提交（`git log -1 -- docs/codex/RESULT.md`）
+  - 含本任务实现与 **`RESULT`** 写回：在仓库中 **`git log -1 --grep=COD-2026-03-27-029`** 或按提交说明 **`feat(backend): COD-2026-03-27-029`** 查找
 - frontend impact
-  - **`LVB-4038`** 可在 **`lovablecomhis/WAVE.md`** 中标记为 **`closed`**（由 PM 在前端仓库或下一 SYNC 更新）；本任务不修改 **`lovablecomhis/`**
+  - 下一波前端可将 **`sequence_rule`**、台账状态、位置策略、通信标识等从上述 **`options`** 拉取；**`device_type_code`** 可替代页面内 **`deviceTypeCnMap`** 的码表（**非强制**，Phase 1 可渐进）
 - pending issues
-  - **`DeviceRelationFormDialog`** 中 **`deviceTypeCnMap`** 仍为设备类型码的辅助中文映射（主选项来自 **`o.label`**）；若后端选项已含完整展示名，可后续去掉映射
-  - **`sequence_rule`**、**`DeviceLedger`** 状态列等仍为页面内展示用常量，**`026`** 未要求对应后端选项路由
-  - 未在本地对真实后端做 **E2E** 冒烟（需 **`018`** 迁移与可用 API）
+  - 前端 **`deviceRelationsService` / `deviceLedgerService`** 需按需增加对上述路径的封装（另派 Lovable/COD）
+  - **`display-status`** 为展示用派生状态，非 **`device`** 表单列持久化枚举
 - next handoff target
-  - PM：联调环境对 **`/api/v1`** 设备域跑一轮冒烟；或派发下一 **`COD`**
+  - 前端小批接线新选项路由，或 **`COD`** 联调冒烟
