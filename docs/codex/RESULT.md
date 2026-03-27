@@ -44,10 +44,11 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
   - **`origin/main`**：**`781a747`**（`chore(lovablecomhis): sync LVB-4035 handoff for COD-2026-03-27-017`）
 - commit SHA or `no git action`
   - **前端 GitHub `main`**：**`781a747`**
-  - **`houjinongfuai`**：见本回合 `git log -1`（文档回写）
+  - **`houjinongfuai`**：**`25f624a`**（`docs(codex): close COD-2026-03-017 LVB-4035 handoff sync at frontend 781a747`）
 - frontend impact
   - **`LVB-4035`** 任务包与队列已在 **`main`**：**`WAVE` / `README`** 中 **`LVB-4034`** → **`closed`**，新增 **`LVB-4035`** **`synced_ready`**；**`CURRENT`** 活跃任务为 **`LVB-4035`**（明细行 DTO 收口）。
 - pending issues
+  - **`houjinongfuai`**：**`git push origin main`** 失败（**`github.com:443`**）；文档已本地提交 **`25f624a`**，恢复网络后请推送。
   - **`lovable`** 工作区未提交：**`lovablecomhis/LOVABLE-PERMANENT-RULES.md`**、**`.env`**（勿纳入 handoff）。
 - next handoff target
   - **Lovable** 拉取 **`781a747`** 后按任务文件改 **`src`**；或 PM 下一派单。
