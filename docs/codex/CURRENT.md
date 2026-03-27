@@ -54,8 +54,9 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-011` fixed `LVB-4033` handoff synced to frontend Git `main`
   - `COD-2026-03-27-012` fixed `LVB-4033` local VERIFY passed
   - `COD-2026-03-27-013` fixed automatic-scheduling + cost-finance ops aggregates (first batch)
-  - `COD-2026-03-27-014` fixed `LVB-4034` handoff at frontend Git `main` commit `8becb20`（首次本地提交）
+  - `COD-2026-03-27-014` fixed `LVB-4034` handoff prepared locally at frontend Git `main` commit `8becb20`
   - `COD-2026-03-27-015` fixed `LVB-4034` handoff pushed to frontend Git `origin/main` at `8becb20`
+  - `COD-2026-03-27-016` partial `LVB-4034` VERIFY at frontend Git `HEAD` `5fe2f01`（聚合与接口 OK；行级 DTO 与 `COD-013` 未对齐）
 - active task
   - none
 
@@ -83,13 +84,13 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一动作：**`COD-2026-03-27-015`** 已将前端 **`origin/main`** 推至 **`8becb20`**（**`LVB-4034`** handoff）。
+- Wait for PM to set **`active task`**。上一验收：**`COD-2026-03-27-016`**（**`LVB-4034`** **`partial VERIFY`**，基准 **`5fe2f01`**）。
 
 ## Hard constraints
 
 - Do not reopen architecture.
 - Do not modify frontend business code.
-- Sync/push-only batch. Keep changes limited to handoff files, git sync, and backend docs.
+- Verify-only batch. Do not implement frontend code in this round.
 
 ## Result writeback
 
