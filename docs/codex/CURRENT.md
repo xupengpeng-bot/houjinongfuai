@@ -64,7 +64,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-021` fixed `LVB-4036` handoff synced to frontend Git `origin/main` at `688bf6c`
   - `COD-2026-03-27-022` partial `LVB-4036` VERIFY at frontend Git `HEAD` `248a83b`
   - `COD-2026-03-27-023` fixed `LVB-4037` handoff synced to frontend Git `origin/main` at `150ea28`
-  - `COD-2026-03-27-024` failed `LVB-4037` VERIFY at local frontend `HEAD` `150ea28`（`git fetch` 失败；代码未满足 LVB-4037 清单，见 **`docs/codex/RESULT.md`**）
+  - `COD-2026-03-27-024` failed `LVB-4037` VERIFY at local frontend `HEAD` `150ea28`（网络与代码未就绪，见历史 **`RESULT.md`**）
+  - `COD-2026-03-27-025` fixed `LVB-4037` sync re-VERIFY passed at frontend Git `HEAD` `92e9e2c`
 - active task
   - none
 
@@ -92,7 +93,7 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-024`**（**`LVB-4037` VERIFY failed** @ **`150ea28`**）。
+- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-025`**（**`LVB-4037`** 重验 **passed** @ **`92e9e2c`**）。
 
 ## Hard constraints
 

@@ -22,31 +22,32 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-024`（**`LVB-4037`** 前端本地验收）
+  - `COD-2026-03-27-025`（**`LVB-4037`** 同步确认与前端重验）
 - mode
   - **`VERIFY`**
 - status
-  - **`failed`**
+  - **`fixed`**
 - changed files / synced files
-  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-024_LVB-4037前端本地验收任务.md`**
+  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-025_LVB-4037同步确认与前端重验任务.md`**
   - 验收在 **`D:\20251211\zhinengti\lovable`** 进行（**未**改 `src/`）
 - migration or contract summary
   - **无**
 - verification result
-  - **`git fetch` / `git pull origin main`**：**失败**（与 `github.com` SSH **连接被重置**），无法在本地确认是否落后于远端；当前本地 **`HEAD`** 与缓存的 **`origin/main`** 均为 **`150ea28`**（tip 为 handoff 提交 **`chore(lovablecomhis): sync LVB-4037…`**，**未见**单独的实现提交）。
+  - **`git fetch origin`** / **`git pull --ff-only origin main`**：**成功**；**`HEAD`** == **`origin/main`** == **`92e9e2c`**
+  - **`git status --short`**：仅 **`?? .env`**
+  - **实现提交可见**：含 **`92e9e2c`**（`Sync data-scope envelopes and add scoped filters`）等，**非**仅 handoff
   - **`npm run build`**：**通过**
-  - **静态代码核对（相对 `LVB-4037` 验收清单）**：
-    - **`src/api/services/data-scope.ts`**：仍将 **`res?.data` 当数组**；**未**解析 **`data.items`**；**`normalizeProjectOption` / `normalizeBlockOption`** 的 **`label` 未使用 `project_name` / `block_name`** → **不满足**「真实契约解析」
-    - **`BlockManagement.tsx`**、**`MeteringPoints.tsx`**：**无** `useScopedProjects` 等引用 → **不满足**「列表页 scoped 项目筛选」
-    - **`MeteringPointFormDialog.tsx`**：区块仍用 **`useProjectBlockOptions`** → **未**改为 **`useScopedBlocks`**
-  - **`LVB-4037` 是否可手闭**：**否**（在当前可检代码与网络条件下未达成验收目标）。
+  - **静态核对**：
+    - **`data-scope.ts`**：**`data.items`** envelope；**`project_name` / `block_name`** → **`label`**
+    - **`BlockManagement` / `MeteringPoints`**：**`useScopedProjects`** + 按项目筛选
+    - **`MeteringPointFormDialog`**：**`useScopedBlocks`**
+  - **`LVB-4037` 是否可手闭**：**是**（静态 + 构建；**未**实网联调）
 - commit SHA or `no git action`
-  - 前端验证基准（本地）：**`150ea28`**
+  - 前端：**`92e9e2c`**
   - 后端文档：本回合 `git log -1`
 - frontend impact
-  - 无代码变更；需 Lovable **推送实现**或修复网络后 **重新 pull 再 VERIFY**。
+  - 无后端代码变更；前端 **`main`** 已含 **`LVB-4037`** 实现。
 - pending issues
-  - 恢复与 **`origin/main`** 的网络同步后重试 **`git pull`**。
-  - 落地 **`LVB-4037`**：`data.items`、**`project_name`/`block_name`**、列表页与 **`useScopedBlocks`**。
+  - 联调时核对 **`GET /ops/data-scope/blocks`** query：**前端 `project_id`** vs **后端 `projectId`**；若实机不按项目收窄区块，再统一参数名。
 - next handoff target
-  - Lovable 完成并推送 **`LVB-4037`** 实现后，PM 再派 **`VERIFY`** 重跑 **`COD-2026-03-27-024`** 或新单。
+  - PM：实网联调或 UAT 手闭；或派 **`BACKEND`** 做小修若需对齐 query。
