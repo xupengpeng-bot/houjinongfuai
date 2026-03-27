@@ -66,7 +66,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-023` fixed `LVB-4037` handoff synced to frontend Git `origin/main` at `150ea28`
   - `COD-2026-03-27-029` fixed device-domain integration enhancement second batch（见 **`docs/codex/RESULT.md`**）
   - `COD-2026-03-27-034` fixed dispatch task sequencing + safe `auto_activate_next`（见 **`docs/codex/RESULT.md`**）
-  - `COD-2026-03-27-035` fixed pump-valve topology V1 alignment + solver `readModel`（见 **`docs/codex/RESULT.md`**）
+  - `COD-2026-03-27-035` fixed pump-valve V1 + solver；收口：泵阀三层真相读模型、网模发布态、solver 仅已发布图（见 **`docs/codex/RESULT.md`**）
 - active task
   - none
 

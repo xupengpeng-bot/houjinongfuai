@@ -1,6 +1,7 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
-import { resolveEffectiveTopologyRelationTypeV1 } from '../topology/topology-relation-type-v1';
+import { NetworkModelService } from '../network-model/network-model.service';
+import { buildPumpValveTopologyRelationReadModel } from '../topology/pump-valve-topology-read-model';
 import {
   SOLVER_CONTRACT_VERSION,
   SolverExplainRequestDto,
@@ -12,28 +13,41 @@ import {
 /**
  * Solver kernel is intentionally stubbed: preview/plan/explain/simulate return
  * stable envelope only. Scheduling algorithms are out of Phase 1 scope (COD-2026-03-26-013).
- * COD-035: preview/plan include `readModel` (network graph version + pump-valve topology context).
+ * COD-035+: preview/plan require a **published** `network_model_version_id`; graph counts come from DB.
  */
 @Injectable()
 export class SolverService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly networkModels: NetworkModelService
+  ) {}
 
-  private async buildReadModel(dto: {
-    network_model_version_id?: string;
-    pump_valve_relation_id?: string;
-  }) {
-    let networkModelVersion: Record<string, unknown> | null = null;
-    if (dto.network_model_version_id) {
-      const r = await this.db.query(
-        `
-        select id, network_model_id, version_no, is_published, source_file_ref, created_at
-        from network_model_version
-        where id = $1
-        `,
-        [dto.network_model_version_id]
+  private async buildReadModel(dto: SolverPreviewRequestDto) {
+    const ver = await this.networkModels.getPublishedVersionById(dto.network_model_version_id);
+    if (!ver) {
+      throw new BadRequestException(
+        'solver requires network_model_version_id to reference a published network_model_version row'
       );
-      networkModelVersion = (r.rows[0] as Record<string, unknown>) ?? null;
     }
+
+    const counts = await this.networkModels.countGraphElements(ver.id);
+
+    const networkModelVersion = {
+      id: ver.id,
+      networkModelId: ver.network_model_id,
+      versionNo: ver.version_no,
+      isPublished: ver.is_published,
+      publishedAt: ver.published_at,
+      sourceFileRef: ver.source_file_ref,
+      createdAt: ver.created_at
+    };
+
+    const networkGraphSnapshot = {
+      source: 'database' as const,
+      versionId: ver.id,
+      nodeCount: counts.nodeCount,
+      pipeCount: counts.pipeCount
+    };
 
     let pumpValveTopology: Record<string, unknown> | null = null;
     if (dto.pump_valve_relation_id) {
@@ -60,21 +74,19 @@ export class SolverService {
       );
       const row = r.rows[0];
       if (row) {
+        const readModel = buildPumpValveTopologyRelationReadModel(row.topology_relation_type_state);
         pumpValveTopology = {
           id: row.id,
           wellId: row.well_id,
           pumpId: row.pump_id,
           valveId: row.valve_id,
           relationRole: row.relation_role,
-          topologyRelationTypeState: row.topology_relation_type_state,
-          topologyRelationTypeEffective: resolveEffectiveTopologyRelationTypeV1(
-            row.topology_relation_type_state
-          )
+          pumpValveTopologyReadModel: readModel
         };
       }
     }
 
-    return { networkModelVersion, pumpValveTopology };
+    return { networkModelVersion, networkGraphSnapshot, pumpValveTopology };
   }
 
   async preview(dto: SolverPreviewRequestDto) {
@@ -82,7 +94,7 @@ export class SolverService {
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
-      notes: 'solver kernel not implemented; envelope only',
+      notes: 'solver kernel not implemented; envelope only — graph bound to published network_model_version',
       readModel,
       result: {
         feasible: true,
@@ -97,7 +109,7 @@ export class SolverService {
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
-      notes: 'solver kernel not implemented; envelope only',
+      notes: 'solver kernel not implemented; envelope only — graph bound to published network_model_version',
       readModel,
       result: {
         planId: null as string | null,

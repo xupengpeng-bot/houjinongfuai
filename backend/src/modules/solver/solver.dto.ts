@@ -1,20 +1,21 @@
 import { IsArray, IsObject, IsOptional, IsString, Matches } from 'class-validator';
 
 /** Frozen contract version string for client compatibility checks. */
-export const SOLVER_CONTRACT_VERSION = 'solver-v1-topology-network';
+export const SOLVER_CONTRACT_VERSION = 'solver-v2-published-network';
 
 /** Accepts RFC-like hex UUID strings including fixed demo ids (version nibble may be 0). */
 export const UUID_LIKE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class SolverPreviewRequestDto {
-  @IsOptional()
+  /** Solver input must bind to a **published** graph version persisted in Postgres (not ad-hoc canvas JSON). */
+  @IsString()
   @Matches(UUID_LIKE)
-  project_id?: string;
+  network_model_version_id!: string;
 
   @IsOptional()
   @Matches(UUID_LIKE)
-  network_model_version_id?: string;
+  project_id?: string;
 
   @IsOptional()
   @Matches(UUID_LIKE)

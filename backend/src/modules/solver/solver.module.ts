@@ -1,5 +1,5 @@
 import { Body, Controller, HttpCode, HttpStatus, Module, Post } from '@nestjs/common';
-import { DatabaseModule } from '../../common/db/database.module';
+import { NetworkModelModule } from '../network-model/network-model.module';
 import { SolverService } from './solver.service';
 import {
   SolverExplainRequestDto,
@@ -38,6 +38,7 @@ class SolverController {
 }
 
 @Module({
+  imports: [NetworkModelModule],
   controllers: [SolverController],
   providers: [SolverService]
 })

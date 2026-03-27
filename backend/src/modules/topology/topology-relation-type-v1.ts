@@ -1,6 +1,7 @@
 /**
  * Aligns with `DeviceRelationsService.relationTypeOptions()` — Phase-1 frozen V1 enum.
- * Solver and pump-valve rows use the same vocabulary for `topology_relation_type_state.effective`.
+ * Pump-valve business rows store chosen values under `pump_valve_relation.topology_relation_type_state`;
+ * generic device edges use `topology_relation` — same vocabulary, **different tables** (do not merge).
  */
 export const TOPOLOGY_RELATION_TYPE_V1 = [
   'control',

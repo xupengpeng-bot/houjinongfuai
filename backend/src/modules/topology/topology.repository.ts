@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
+import { buildPumpValveTopologyRelationReadModel } from './pump-valve-topology-read-model';
 import { resolveEffectiveTopologyRelationTypeV1 } from './topology-relation-type-v1';
 
 @Injectable()
@@ -63,7 +64,8 @@ export class TopologyRepository {
     `);
     return result.rows.map((row) => ({
       ...row,
-      topologyRelationTypeEffective: resolveEffectiveTopologyRelationTypeV1(row.topologyRelationTypeState)
+      topologyRelationTypeEffective: resolveEffectiveTopologyRelationTypeV1(row.topologyRelationTypeState),
+      pumpValveTopologyReadModel: buildPumpValveTopologyRelationReadModel(row.topologyRelationTypeState)
     }));
   }
 
