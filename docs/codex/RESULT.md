@@ -22,32 +22,30 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-022`（`LVB-4036` 前端本地验收）
+  - `COD-2026-03-27-023`（前端 **`LVB-4037`** handoff 同步到 Git `main`）
 - mode
-  - **`VERIFY`**
+  - **`SYNC`**
 - status
-  - **`partial`**
+  - **`fixed`**
 - changed files / synced files
-  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-022_LVB-4036前端本地验收任务.md`**
-  - 验收过程 **`git pull`** 前端（**未**改 `lovable/src/`）
+  - 前端仓库 `D:\20251211\zhinengti\lovable` 路径 **`lovablecomhis/`**（仅 handoff，**未**提交 `src/`、`.env`、`LOVABLE-PERMANENT-RULES.md`）：
+    - **`lovablecomhis/CURRENT.md`**
+    - **`lovablecomhis/WAVE.md`**
+    - **`lovablecomhis/README.md`**
+    - **`lovablecomhis/LVB-4037-项目区块权限前端收口第二批.md`**
+    - **`lovablecomhis/context/LVB-4037-context.md`**
+    - **`lovablecomhis/fixtures/LVB-4037/README.md`**
+  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-023_前端LVB-4037任务包同步到Git主线任务.md`**
 - migration or contract summary
-  - **无**
+  - **无**（文档同步批次）。
 - verification result
-  - 前端 **`origin/main`** 与本地 **`HEAD`**：**一致**（**`248a83b`**）
-  - **`npm run build`**（`D:\20251211\zhinengti\lovable`）：**通过**
-  - **静态代码核对**：
-    - 已存在 **`src/api/services/data-scope.ts`**，real 模式下请求 **`/ops/data-scope/summary`**、**`/ops/data-scope/projects`**、**`/ops/data-scope/blocks`**
-    - **`useScopedProjects` / `useScopedBlocks`** 已接入 **`BlockFormDialog`**、**`MeteringPointFormDialog`**（项目）、**`BlockCockpit`**、**`HistoryReplay`**（项目 + 随项目缩窄区块）
-    - **`BlockManagement.tsx`**、**`MeteringPoints.tsx`**：**本批 `main` 未改动**，仍**未**接 data-scope 筛选（相对 LVB-4036 原文档为**缺项**）
-    - **`MeteringPointFormDialog`** 中区块下拉仍走 **`useProjectBlockOptions`**（`/project-blocks/options`），**未**改用 **`useScopedBlocks`**，与「区块选项一律来自 data-scope」的严格解读**不一致**（是否接受由 PM 决定）
-    - **real 契约风险（未跑联调，仅静态比对）**：后端 `ok()` 载荷为 **`data: { items: [...] }`**，且选项 DTO 为 **`project_name` / `block_name` / `id`**；当前 **`data-scope.ts`** 将 **`res.data` 当数组解析**，且 **`normalizeProjectOption` 的 `label` 未读 `project_name`**，**在真实 API 下可能导致空列表或空标签**，需后续 **`BACKEND` 或 Lovable 小修**对齐（本 VERIFY 批次不改 `src/`）
+  - **`git push origin main`**：**成功**
 - commit SHA or `no git action`
-  - 前端验收基准：**`248a83b`**
-  - 后端文档收口：本回合 `git log -1`（`docs(codex): … COD-2026-03-27-022 …`）
+  - 前端 **`150ea28`**（`chore(lovablecomhis): sync LVB-4037 handoff for COD-2026-03-27-023`）
+  - 后端文档：本回合 `git log -1`（`docs(codex): … COD-2026-03-27-023 …`）
 - frontend impact
-  - 无代码变更；结论供 PM 决定是否关闭 **`LVB-4036`** 或追加修补批次。
+  - **`LVB-4037`** 任务说明已上 **`origin/main`**，用于收口 **`LVB-4036`** 遗留的 data-scope 解析与页面覆盖（**实现**由 Lovable 执行，非本批次）。
 - pending issues
-  - 对齐 **`data-scope.ts`** 与后端 **`{ data: { items } }`** 及 **`project_name` / `block_name`** 字段。
-  - 是否补做 **`BlockManagement` / `MeteringPoints`** 页筛选与 **`MeteringPointFormDialog`** 区块选项策略。
+  - 无（本批次仅同步 handoff）。
 - next handoff target
-  - PM：关闭 **`LVB-4036`**（接受 partial）或派 **`BACKEND`/Lovable** 契约修补 + 列表页第二批；或更新手闭标准后重做 **`VERIFY`**。
+  - Lovable 实现 **`LVB-4037`**；或 PM 派 **`VERIFY`**。

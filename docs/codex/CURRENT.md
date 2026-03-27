@@ -62,7 +62,8 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-019` fixed `LVB-4035` VERIFY passed at frontend Git `HEAD` `03b9235`
   - `COD-2026-03-27-020` fixed project/block data-scope backend batch (`/ops/data-scope/*`)
   - `COD-2026-03-27-021` fixed `LVB-4036` handoff synced to frontend Git `origin/main` at `688bf6c`
-  - `COD-2026-03-27-022` partial local verify `LVB-4036` at frontend Git `248a83b`（`npm run build` 通过；见 **`docs/codex/RESULT.md`**）
+  - `COD-2026-03-27-022` partial `LVB-4036` VERIFY at frontend Git `HEAD` `248a83b`
+  - `COD-2026-03-27-023` fixed `LVB-4037` handoff synced to frontend Git `origin/main` at `150ea28`
 - active task
   - none
 
@@ -90,7 +91,7 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-022`**（`LVB-4036` VERIFY **partial**，前端 **`248a83b`**）。
+- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-023`**（`LVB-4037` handoff → 前端 **`150ea28`**）。
 
 ## Hard constraints
 
