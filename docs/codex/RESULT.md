@@ -22,30 +22,31 @@ Purpose: overwrite the latest-result section after each execution. Keep the fiel
 - execution time
   - 2026-03-27
 - task id
-  - `COD-2026-03-27-023`（前端 **`LVB-4037`** handoff 同步到 Git `main`）
+  - `COD-2026-03-27-024`（**`LVB-4037`** 前端本地验收）
 - mode
-  - **`SYNC`**
+  - **`VERIFY`**
 - status
-  - **`fixed`**
+  - **`failed`**
 - changed files / synced files
-  - 前端仓库 `D:\20251211\zhinengti\lovable` 路径 **`lovablecomhis/`**（仅 handoff，**未**提交 `src/`、`.env`、`LOVABLE-PERMANENT-RULES.md`）：
-    - **`lovablecomhis/CURRENT.md`**
-    - **`lovablecomhis/WAVE.md`**
-    - **`lovablecomhis/README.md`**
-    - **`lovablecomhis/LVB-4037-项目区块权限前端收口第二批.md`**
-    - **`lovablecomhis/context/LVB-4037-context.md`**
-    - **`lovablecomhis/fixtures/LVB-4037/README.md`**
-  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-023_前端LVB-4037任务包同步到Git主线任务.md`**
+  - **`docs/codex/CURRENT.md`**、**`docs/codex/RESULT.md`**、**`docs/codex/COD-2026-03-27-024_LVB-4037前端本地验收任务.md`**
+  - 验收在 **`D:\20251211\zhinengti\lovable`** 进行（**未**改 `src/`）
 - migration or contract summary
-  - **无**（文档同步批次）。
+  - **无**
 - verification result
-  - **`git push origin main`**：**成功**
+  - **`git fetch` / `git pull origin main`**：**失败**（与 `github.com` SSH **连接被重置**），无法在本地确认是否落后于远端；当前本地 **`HEAD`** 与缓存的 **`origin/main`** 均为 **`150ea28`**（tip 为 handoff 提交 **`chore(lovablecomhis): sync LVB-4037…`**，**未见**单独的实现提交）。
+  - **`npm run build`**：**通过**
+  - **静态代码核对（相对 `LVB-4037` 验收清单）**：
+    - **`src/api/services/data-scope.ts`**：仍将 **`res?.data` 当数组**；**未**解析 **`data.items`**；**`normalizeProjectOption` / `normalizeBlockOption`** 的 **`label` 未使用 `project_name` / `block_name`** → **不满足**「真实契约解析」
+    - **`BlockManagement.tsx`**、**`MeteringPoints.tsx`**：**无** `useScopedProjects` 等引用 → **不满足**「列表页 scoped 项目筛选」
+    - **`MeteringPointFormDialog.tsx`**：区块仍用 **`useProjectBlockOptions`** → **未**改为 **`useScopedBlocks`**
+  - **`LVB-4037` 是否可手闭**：**否**（在当前可检代码与网络条件下未达成验收目标）。
 - commit SHA or `no git action`
-  - 前端 **`150ea28`**（`chore(lovablecomhis): sync LVB-4037 handoff for COD-2026-03-27-023`）
-  - 后端文档：本回合 `git log -1`（`docs(codex): … COD-2026-03-27-023 …`）
+  - 前端验证基准（本地）：**`150ea28`**
+  - 后端文档：本回合 `git log -1`
 - frontend impact
-  - **`LVB-4037`** 任务说明已上 **`origin/main`**，用于收口 **`LVB-4036`** 遗留的 data-scope 解析与页面覆盖（**实现**由 Lovable 执行，非本批次）。
+  - 无代码变更；需 Lovable **推送实现**或修复网络后 **重新 pull 再 VERIFY**。
 - pending issues
-  - 无（本批次仅同步 handoff）。
+  - 恢复与 **`origin/main`** 的网络同步后重试 **`git pull`**。
+  - 落地 **`LVB-4037`**：`data.items`、**`project_name`/`block_name`**、列表页与 **`useScopedBlocks`**。
 - next handoff target
-  - Lovable 实现 **`LVB-4037`**；或 PM 派 **`VERIFY`**。
+  - Lovable 完成并推送 **`LVB-4037`** 实现后，PM 再派 **`VERIFY`** 重跑 **`COD-2026-03-27-024`** 或新单。
