@@ -8,8 +8,8 @@ describe('DeviceLedgerService option helpers', () => {
     expect(svc.displayStatusOptions().map((o) => o.value)).toEqual(['online', 'offline', 'alarm']);
   });
 
-  it('locationSourceStrategyOptions has four strategies', () => {
-    expect(svc.locationSourceStrategyOptions()).toHaveLength(4);
+  it('locationSourceStrategyOptions includes auto and four explicit strategies', () => {
+    expect(svc.locationSourceStrategyOptions()).toHaveLength(5);
   });
 
   it('commIdentityTypeOptions has five kinds', () => {

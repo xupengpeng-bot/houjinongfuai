@@ -14,13 +14,25 @@ import {
   Query
 } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
+import {
+  ASSET_EFFECTIVE_LATITUDE_SQL,
+  ASSET_EFFECTIVE_LONGITUDE_SQL,
+  ASSET_EFFECTIVE_SOURCE_SQL,
+  buildSpatialLocationReadModelAsset
+} from '../../common/location/effective-location';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const ASSET_CODE_PREFIX = 'AST-HJ-';
 const ASSET_TYPES = ['well', 'pump_station', 'weather_point', 'pump', 'pipe', 'elbow', 'valve_group', 'control_zone', 'power_box', 'well_house'] as const;
 const LIFECYCLE_STATUSES = ['draft', 'active', 'decommissioned'] as const;
 const INSTALL_STATUSES = ['planned', 'installed', 'removed'] as const;
-const LOCATION_SOURCE_STRATEGIES = ['manual_preferred', 'reported_preferred', 'manual_only', 'reported_only'] as const;
+const LOCATION_SOURCE_STRATEGIES = [
+  'manual_preferred',
+  'reported_preferred',
+  'manual_only',
+  'reported_only',
+  'auto'
+] as const;
 
 type AssetType = (typeof ASSET_TYPES)[number];
 type LifecycleStatus = (typeof LIFECYCLE_STATUSES)[number];
@@ -52,9 +64,14 @@ interface AssetRecord {
   manual_longitude: number | null;
   install_position_desc: string | null;
   location_source_strategy: LocationSourceStrategy | null;
+  reported_latitude: number | null;
+  reported_longitude: number | null;
+  reported_at: string | null;
+  reported_source: string | null;
   effective_latitude: number | null;
   effective_longitude: number | null;
   effective_location_source: string | null;
+  location_read_model?: ReturnType<typeof buildSpatialLocationReadModelAsset>;
 }
 
 interface AssetOption {
@@ -246,13 +263,13 @@ class AssetService {
         a.manual_longitude::float8 as manual_longitude,
         a.install_position_desc,
         a.location_source_strategy,
-        coalesce(a.manual_latitude::float8, a.reported_latitude::float8) as effective_latitude,
-        coalesce(a.manual_longitude::float8, a.reported_longitude::float8) as effective_longitude,
-        case
-          when a.manual_latitude is not null and a.manual_longitude is not null then 'manual'
-          when a.reported_latitude is not null and a.reported_longitude is not null then 'reported'
-          else null
-        end as effective_location_source
+        a.reported_latitude::float8 as reported_latitude,
+        a.reported_longitude::float8 as reported_longitude,
+        a.reported_at::text as reported_at,
+        a.reported_source,
+        ${ASSET_EFFECTIVE_LATITUDE_SQL} as effective_latitude,
+        ${ASSET_EFFECTIVE_LONGITUDE_SQL} as effective_longitude,
+        ${ASSET_EFFECTIVE_SOURCE_SQL} as effective_location_source
       from asset a
       join project p on p.id = a.project_id
       join region r on r.id = p.region_id
@@ -393,13 +410,13 @@ class AssetService {
         a.manual_longitude::float8 as manual_longitude,
         a.install_position_desc,
         a.location_source_strategy,
-        coalesce(a.manual_latitude::float8, a.reported_latitude::float8) as effective_latitude,
-        coalesce(a.manual_longitude::float8, a.reported_longitude::float8) as effective_longitude,
-        case
-          when a.manual_latitude is not null and a.manual_longitude is not null then 'manual'
-          when a.reported_latitude is not null and a.reported_longitude is not null then 'reported'
-          else null
-        end as effective_location_source,
+        a.reported_latitude::float8 as reported_latitude,
+        a.reported_longitude::float8 as reported_longitude,
+        a.reported_at::text as reported_at,
+        a.reported_source,
+        ${ASSET_EFFECTIVE_LATITUDE_SQL} as effective_latitude,
+        ${ASSET_EFFECTIVE_LONGITUDE_SQL} as effective_longitude,
+        ${ASSET_EFFECTIVE_SOURCE_SQL} as effective_location_source,
         count(*) over()::text as total_count
       from asset a
       join project p on p.id = a.project_id
@@ -414,7 +431,10 @@ class AssetService {
       [TENANT_ID, pageSize, offset]
     );
 
-    const items = result.rows.map(({ total_count, ...row }) => row);
+    const items = result.rows.map(({ total_count, ...row }) => ({
+      ...row,
+      location_read_model: buildSpatialLocationReadModelAsset(row)
+    }));
     const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
     return {
       items,
@@ -452,13 +472,13 @@ class AssetService {
         a.manual_longitude::float8 as manual_longitude,
         a.install_position_desc,
         a.location_source_strategy,
-        coalesce(a.manual_latitude::float8, a.reported_latitude::float8) as effective_latitude,
-        coalesce(a.manual_longitude::float8, a.reported_longitude::float8) as effective_longitude,
-        case
-          when a.manual_latitude is not null and a.manual_longitude is not null then 'manual'
-          when a.reported_latitude is not null and a.reported_longitude is not null then 'reported'
-          else null
-        end as effective_location_source
+        a.reported_latitude::float8 as reported_latitude,
+        a.reported_longitude::float8 as reported_longitude,
+        a.reported_at::text as reported_at,
+        a.reported_source,
+        ${ASSET_EFFECTIVE_LATITUDE_SQL} as effective_latitude,
+        ${ASSET_EFFECTIVE_LONGITUDE_SQL} as effective_longitude,
+        ${ASSET_EFFECTIVE_SOURCE_SQL} as effective_location_source
       from asset a
       join project p on p.id = a.project_id
       join region r on r.id = p.region_id
@@ -533,7 +553,10 @@ class AssetService {
     if (!row) {
       throw appException(HttpStatus.NOT_FOUND, 'TARGET_NOT_FOUND', 'Asset not found', { id });
     }
-    return row;
+    return {
+      ...row,
+      location_read_model: buildSpatialLocationReadModelAsset(row)
+    };
   }
 
   async searchLocations(projectId: string, q: string, page = 1, pageSize = 20): Promise<AssetLocationSearchResponse> {

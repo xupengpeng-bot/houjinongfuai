@@ -1,5 +1,16 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
-import { DeviceLedgerRepository, PHASE1_TENANT_ID } from './device-ledger.repository';
+import {
+  buildSpatialLocationReadModelDevice,
+  resolveEffectiveLocation,
+  type SpatialLocationReadModelV1
+} from '../../common/location/effective-location';
+import { DeviceLedgerRepository, type LedgerDeviceRow, PHASE1_TENANT_ID } from './device-ledger.repository';
+
+export type LedgerDeviceWithLocation = LedgerDeviceRow & {
+  map_display_latitude: number | null;
+  map_display_longitude: number | null;
+  location_read_model: SpatialLocationReadModelV1;
+};
 
 export interface CreateLedgerDeviceBody {
   device_code: string;
@@ -34,6 +45,31 @@ export class DeviceLedgerService {
     return PHASE1_TENANT_ID;
   }
 
+  private enrichLocation(row: LedgerDeviceRow): LedgerDeviceWithLocation {
+    const eff = resolveEffectiveLocation({
+      strategy: row.location_source_strategy,
+      manual: { lat: row.manual_latitude, lng: row.manual_longitude },
+      reported: { lat: row.reported_latitude, lng: row.reported_longitude }
+    });
+    const effective_latitude = eff.lat;
+    const effective_longitude = eff.lng;
+    const effective_location_source = eff.source === 'none' ? null : eff.source;
+    return {
+      ...row,
+      effective_latitude,
+      effective_longitude,
+      effective_location_source,
+      map_display_latitude: effective_latitude,
+      map_display_longitude: effective_longitude,
+      location_read_model: buildSpatialLocationReadModelDevice({
+        ...row,
+        effective_latitude,
+        effective_longitude,
+        effective_location_source
+      })
+    };
+  }
+
   async list(params: {
     page: number;
     pageSize: number;
@@ -42,16 +78,17 @@ export class DeviceLedgerService {
     deviceTypeId?: string;
     q?: string;
   }) {
-    return this.repo.findMany({
+    const { items, total } = await this.repo.findMany({
       tenantId: this.tenant(),
       ...params
     });
+    return { items: items.map((r) => this.enrichLocation(r)), total };
   }
 
   async getById(id: string) {
     const row = await this.repo.findById(this.tenant(), id);
     if (!row) throw new NotFoundException('device not found');
-    return row;
+    return this.enrichLocation(row);
   }
 
   async create(body: CreateLedgerDeviceBody) {
@@ -147,7 +184,8 @@ export class DeviceLedgerService {
       { value: 'manual_preferred', label: '优先使用人工位置' },
       { value: 'reported_preferred', label: '优先使用上报位置' },
       { value: 'manual_only', label: '仅使用人工位置' },
-      { value: 'reported_only', label: '仅使用上报位置' }
+      { value: 'reported_only', label: '仅使用上报位置' },
+      { value: 'auto', label: '自动（上报优先）' }
     ];
   }
 
