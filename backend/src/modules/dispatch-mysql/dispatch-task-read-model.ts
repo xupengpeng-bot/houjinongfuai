@@ -9,6 +9,10 @@ export interface DispatchTaskReadModel {
   title: string | null;
   mode: string | null;
   status: string;
+  /** Present after `002_dispatch_task_sequencing.sql`. */
+  next_task_id?: string | null;
+  depends_on_task_id?: string | null;
+  queue_order?: number | null;
   purpose: string | null;
   source_file: string | null;
   artifact_ref: string | null;
@@ -52,6 +56,16 @@ export function buildDispatchTaskReadModel(row: RowDataPacket): DispatchTaskRead
   };
   if (summary == null && row.payload_md != null && String(row.payload_md).length > 0) {
     base.payload_md_legacy = String(row.payload_md);
+  }
+  if ('next_task_id' in row && row.next_task_id !== undefined) {
+    base.next_task_id = row.next_task_id == null ? null : String(row.next_task_id);
+  }
+  if ('depends_on_task_id' in row && row.depends_on_task_id !== undefined) {
+    base.depends_on_task_id =
+      row.depends_on_task_id == null ? null : String(row.depends_on_task_id);
+  }
+  if ('queue_order' in row && row.queue_order !== undefined) {
+    base.queue_order = row.queue_order === null ? null : Number(row.queue_order);
   }
   return base;
 }

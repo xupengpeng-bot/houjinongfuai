@@ -1,7 +1,11 @@
 import { Body, Controller, Get, Headers, Module, NotFoundException, Param, Post } from '@nestjs/common';
 import type { IncomingHttpHeaders } from 'http';
 import { ok } from '../../common/http/api-response';
-import { DispatchTaskResultSummaryBodyDto, DispatchTaskStatusBodyDto } from './dispatch-mysql.dto';
+import {
+  DispatchTaskResultSummaryBodyDto,
+  DispatchTaskSequencingBodyDto,
+  DispatchTaskStatusBodyDto
+} from './dispatch-mysql.dto';
 import { DispatchMysqlService } from './dispatch-mysql.service';
 
 @Controller('dispatch')
@@ -16,8 +20,25 @@ class DispatchMysqlController {
   ) {
     this.dispatch.assertWriteHeaders(headers);
     const syncTeam = body.sync_team !== false;
-    const { task, team } = await this.dispatch.updateTaskStatus(taskId, body.status, syncTeam);
+    const autoActivateNext = body.auto_activate_next === true;
+    const { task, team } = await this.dispatch.updateTaskStatus(
+      taskId,
+      body.status,
+      syncTeam,
+      autoActivateNext
+    );
     return ok({ task, team });
+  }
+
+  @Post('task/:taskId/sequencing')
+  async postTaskSequencing(
+    @Param('taskId') taskId: string,
+    @Body() body: DispatchTaskSequencingBodyDto,
+    @Headers() headers: IncomingHttpHeaders
+  ) {
+    this.dispatch.assertWriteHeaders(headers);
+    const row = await this.dispatch.updateTaskSequencing(taskId, body);
+    return ok(row);
   }
 
   @Post('task/:taskId/result-summary')

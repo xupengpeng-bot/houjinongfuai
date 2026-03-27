@@ -48,4 +48,28 @@ describe('dispatch-task-read-model', () => {
     expect(m.summary).toBeNull();
     expect(m.payload_md_legacy).toContain('# Title');
   });
+
+  it('buildDispatchTaskReadModel exposes sequencing fields when present on row', () => {
+    const row = {
+      task_id: 'T3',
+      team: 'cursor',
+      title: 't',
+      mode: 'BACKEND',
+      status: 'synced_ready',
+      purpose: null,
+      source_file: null,
+      artifact_ref: null,
+      summary_json: null,
+      payload_md: null,
+      next_task_id: 'COD-NEXT',
+      depends_on_task_id: null,
+      queue_order: 10,
+      updated_at: new Date(),
+      created_at: new Date()
+    };
+    const m = buildDispatchTaskReadModel(row as any);
+    expect(m.next_task_id).toBe('COD-NEXT');
+    expect(m.depends_on_task_id).toBeNull();
+    expect(m.queue_order).toBe(10);
+  });
 });

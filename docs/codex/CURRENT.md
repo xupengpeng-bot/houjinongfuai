@@ -65,6 +65,7 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-022` partial `LVB-4036` VERIFY at frontend Git `HEAD` `248a83b`
   - `COD-2026-03-27-023` fixed `LVB-4037` handoff synced to frontend Git `origin/main` at `150ea28`
   - `COD-2026-03-27-029` fixed device-domain integration enhancement second batch（见 **`docs/codex/RESULT.md`**）
+  - `COD-2026-03-27-034` fixed dispatch task sequencing + safe `auto_activate_next`（见 **`docs/codex/RESULT.md`**）
 - active task
   - none
 
@@ -92,7 +93,7 @@ Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-029`**（设备域联调增强第二批：新增只读选项路由与中文关系类型枚举）。
+- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-034`**（dispatch 编排字段与关闭时原子激活下一任务）。
 
 ## Hard constraints
 
