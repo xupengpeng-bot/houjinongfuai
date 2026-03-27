@@ -4,6 +4,7 @@ import {
   resolveEffectiveLocation,
   type SpatialLocationReadModelV1
 } from '../../common/location/effective-location';
+import { assertNoForbiddenSpatialWriteKeys } from '../../common/location/spatial-location-semantics';
 import { DeviceLedgerRepository, type LedgerDeviceRow, PHASE1_TENANT_ID } from './device-ledger.repository';
 
 export type LedgerDeviceWithLocation = LedgerDeviceRow & {
@@ -92,6 +93,7 @@ export class DeviceLedgerService {
   }
 
   async create(body: CreateLedgerDeviceBody) {
+    assertNoForbiddenSpatialWriteKeys(body as unknown as Record<string, unknown>);
     const tid = this.tenant();
     const typeId = await this.repo.resolveDeviceTypeId(tid, body.device_type);
     if (!typeId) throw new BadRequestException('device_type not found');
@@ -120,6 +122,7 @@ export class DeviceLedgerService {
   }
 
   async update(id: string, body: UpdateLedgerDeviceBody) {
+    assertNoForbiddenSpatialWriteKeys(body as unknown as Record<string, unknown>);
     const tid = this.tenant();
     const existing = await this.repo.findById(tid, id);
     if (!existing) throw new NotFoundException('device not found');

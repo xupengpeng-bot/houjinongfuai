@@ -3,6 +3,11 @@
  * Effective coordinates are the only map/list default; canvas edits are not persisted truth.
  */
 
+import {
+  SPATIAL_LOCATION_LAYERS_CONTRACT_V1,
+  type SpatialLocationLayersContractV1
+} from './spatial-location-semantics';
+
 export type LocationSourceStrategy =
   | 'manual_preferred'
   | 'reported_preferred'
@@ -151,6 +156,8 @@ export const MAP_TRUTH_NOTICE =
 export interface SpatialLocationReadModelV1 {
   truthKind: 'spatial_location_v1';
   entity: 'asset' | 'device';
+  /** Static taxonomy: truth input vs derived vs map display vs downstream refs. */
+  layersContract: SpatialLocationLayersContractV1;
   layers: {
     manual: {
       latitude: number | null;
@@ -196,6 +203,7 @@ export function buildSpatialLocationReadModelAsset(row: {
   return {
     truthKind: 'spatial_location_v1',
     entity: 'asset',
+    layersContract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1,
     layers: {
       manual: {
         latitude: row.manual_latitude,
@@ -242,6 +250,7 @@ export function buildSpatialLocationReadModelDevice(row: {
   return {
     truthKind: 'spatial_location_v1',
     entity: 'device',
+    layersContract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1,
     layers: {
       manual: {
         latitude: row.manual_latitude,

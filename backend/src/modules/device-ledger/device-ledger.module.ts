@@ -1,5 +1,6 @@
 import { Body, Controller, Delete, Get, Module, Param, Post, Put, Query } from '@nestjs/common';
 import { ok } from '../../common/http/api-response';
+import { SPATIAL_LOCATION_LAYERS_CONTRACT_V1 } from '../../common/location/spatial-location-semantics';
 import {
   CreateLedgerDeviceDto,
   ListDevicesQueryDto,
@@ -24,7 +25,13 @@ class DeviceLedgerController {
       deviceTypeId: query.device_type_id,
       q: query.q
     });
-    return ok({ items, total, page, page_size: pageSize });
+    return ok({
+      items,
+      total,
+      page,
+      page_size: pageSize,
+      spatial_location_contract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1
+    });
   }
 
   @Post()
@@ -41,6 +48,11 @@ class DeviceLedgerController {
   @Get('location-source-strategies/options')
   locationSourceStrategyOptions() {
     return ok({ items: this.service.locationSourceStrategyOptions() });
+  }
+
+  @Get('spatial-location-contract')
+  spatialLocationContract() {
+    return ok({ spatial_location_contract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1 });
   }
 
   @Get('comm-identity-types/options')

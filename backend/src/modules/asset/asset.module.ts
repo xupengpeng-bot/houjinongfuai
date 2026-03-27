@@ -20,6 +20,10 @@ import {
   ASSET_EFFECTIVE_SOURCE_SQL,
   buildSpatialLocationReadModelAsset
 } from '../../common/location/effective-location';
+import {
+  assertNoForbiddenSpatialWriteKeys,
+  SPATIAL_LOCATION_LAYERS_CONTRACT_V1
+} from '../../common/location/spatial-location-semantics';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const ASSET_CODE_PREFIX = 'AST-HJ-';
@@ -440,7 +444,8 @@ class AssetService {
       items,
       total,
       page,
-      page_size: pageSize
+      page_size: pageSize,
+      spatial_location_contract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1
     };
   }
 
@@ -642,6 +647,7 @@ class AssetService {
   }
 
   async create(dto: CreateAssetDto) {
+    assertNoForbiddenSpatialWriteKeys(dto as Record<string, unknown>);
     const fieldErrors: Record<string, string> = {};
     if (dto.asset_code?.trim()) fieldErrors.asset_code = 'asset_code must not be provided';
     if (!dto.asset_name?.trim()) fieldErrors.asset_name = 'asset_name is required';
@@ -722,6 +728,7 @@ class AssetService {
   }
 
   async update(id: string, dto: UpdateAssetDto) {
+    assertNoForbiddenSpatialWriteKeys(dto as Record<string, unknown>);
     if (dto.asset_type && !ASSET_TYPES.includes(dto.asset_type)) {
       throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
         fieldErrors: { asset_type: 'asset_type is invalid' }
@@ -863,6 +870,11 @@ class AssetController {
   @Get('type-options')
   typeOptions() {
     return this.service.typeOptions();
+  }
+
+  @Get('spatial-location-contract')
+  spatialLocationContract() {
+    return { spatial_location_contract: SPATIAL_LOCATION_LAYERS_CONTRACT_V1 };
   }
 
   @Get('location-search')
