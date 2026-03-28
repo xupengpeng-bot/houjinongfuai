@@ -14,7 +14,7 @@
     "db:migrate:reset": "powershell -ExecutionPolicy Bypass -File ./scripts/migrate.ps1 -Reset",
     "db:seed": "npm run db:seed:reference",
     "db:seed:reference:sql": "powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group reference",
-    "db:seed:reference": "npm run db:seed:reference:sql && npm run region-reference:import",
+    "db:seed:reference": "npm run region-reference:import && npm run db:seed:reference:sql",
     "db:seed:baseline": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group baseline",
     "db:seed:demo": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group demo",
     "db:seed:test": "npm run db:seed:reference && powershell -ExecutionPolicy Bypass -File ./scripts/seed.ps1 -Group test",

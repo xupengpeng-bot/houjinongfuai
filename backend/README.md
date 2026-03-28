@@ -68,13 +68,28 @@ npm run db:up
 npm run db:migrate
 ```
 
-6. Run the app in dev mode:
+6. Optional: seed reference data only:
+
+```powershell
+npm run db:seed:reference
+```
+
+Notes:
+
+- `npm run db:seed` now maps to `db:seed:reference` and is safe by default.
+- Business baseline, demo, and test/UAT data are no longer part of default startup.
+- If you explicitly need them, run one of:
+  - `npm run db:seed:baseline`
+  - `npm run db:seed:demo`
+  - `npm run db:seed:test`
+
+7. Run the app in dev mode:
 
 ```powershell
 npm run start:dev
 ```
 
-7. Check health:
+8. Check health:
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:3000/api/v1/health -UseBasicParsing

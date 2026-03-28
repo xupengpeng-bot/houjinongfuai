@@ -1,0 +1,12 @@
+scenario_code: jitter_45_75
+imei: "860000000000002"
+steps:
+  - at_ms: 0
+    direction: up
+    msg_type: REGISTER
+  - at_ms: 45000
+    direction: up
+    msg_type: RUNTIME_TICK
+  - at_ms: 120000
+    direction: up
+    msg_type: RUNTIME_TICK

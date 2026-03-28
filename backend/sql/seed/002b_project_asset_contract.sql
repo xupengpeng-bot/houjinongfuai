@@ -208,3 +208,25 @@ values
     '2026-03-22 09:54:00+08'
   )
 on conflict (tenant_id, asset_code) do nothing;
+
+update project
+set
+  manual_region_id = '610431001',
+  maintenance_team_id = '00000000-0000-0000-0000-000000000701',
+  contact_phone = '029-37210001',
+  updated_at = '2026-03-22 09:40:00+08'
+where tenant_id = '00000000-0000-0000-0000-000000000001'
+  and id = '00000000-0000-0000-0000-000000000801';
+
+update asset
+set
+  maintenance_team_id = '00000000-0000-0000-0000-000000000702',
+  manual_region_id = '610431001',
+  manual_address_text = 'Inside pump room',
+  manual_latitude = 34.258120,
+  manual_longitude = 108.197030,
+  install_position_desc = 'Pump room cabinet',
+  location_source_strategy = 'manual_preferred',
+  updated_at = '2026-03-22 09:51:00+08'
+where tenant_id = '00000000-0000-0000-0000-000000000001'
+  and id = '00000000-0000-0000-0000-000000000911';

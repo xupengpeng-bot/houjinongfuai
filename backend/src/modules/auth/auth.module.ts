@@ -5,7 +5,11 @@ import { ok } from '../../common/http/api-response';
 class AuthController {
   @Post('login')
   login() {
-    return ok({ accessToken: 'todo', refreshToken: 'todo' });
+    return ok({
+      token: 'phase1-dev-token',
+      accessToken: 'phase1-dev-token',
+      refreshToken: 'phase1-refresh-token'
+    });
   }
 
   @Post('logout')
@@ -16,9 +20,23 @@ class AuthController {
   @Get('me')
   me() {
     return ok({
-      userId: 'todo',
+      id: '00000000-0000-0000-0000-000000000102',
+      userId: '00000000-0000-0000-0000-000000000102',
+      name: 'Demo Manager',
+      role: 'project_manager',
+      area: 'Demo Project',
       roles: ['project_manager'],
       dataScopes: []
+    });
+  }
+
+  @Get('profile')
+  profile() {
+    return ok({
+      id: '00000000-0000-0000-0000-000000000102',
+      name: 'Demo Manager',
+      role: 'project_manager',
+      area: 'Demo Project'
     });
   }
 

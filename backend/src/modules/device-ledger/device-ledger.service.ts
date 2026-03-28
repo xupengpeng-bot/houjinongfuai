@@ -11,6 +11,11 @@ export type LedgerDeviceWithLocation = LedgerDeviceRow & {
   map_display_latitude: number | null;
   map_display_longitude: number | null;
   location_read_model: SpatialLocationReadModelV1;
+  sn: string;
+  name: string;
+  type: string;
+  area: string | null;
+  well: string | null;
 };
 
 export interface CreateLedgerDeviceBody {
@@ -60,6 +65,11 @@ export class DeviceLedgerService {
       effective_latitude,
       effective_longitude,
       effective_location_source,
+      sn: row.device_code,
+      name: row.device_name,
+      type: row.device_type,
+      area: row.region_name,
+      well: row.asset_name ?? row.project_name ?? null,
       map_display_latitude: effective_latitude,
       map_display_longitude: effective_longitude,
       location_read_model: buildSpatialLocationReadModelDevice({

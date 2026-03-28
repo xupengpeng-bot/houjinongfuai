@@ -1,0 +1,9 @@
+scenario_code: steady_60s
+imei: "860000000000001"
+steps:
+  - at_ms: 0
+    direction: up
+    msg_type: REGISTER
+  - at_ms: 60000
+    direction: up
+    msg_type: RUNTIME_TICK

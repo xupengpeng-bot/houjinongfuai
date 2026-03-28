@@ -17,11 +17,20 @@ export class OrderRepository {
     orderNo: string;
     sessionId: string;
     userId: string;
+    userDisplayName: string | null;
+    userMobile: string | null;
     billingPackageId: string;
+    billingPackageName: string | null;
+    wellCode: string | null;
+    wellDisplayName: string | null;
     status: string;
     settlementStatus: string;
     chargeDurationSec: number | null;
+    chargeVolume: number | null;
+    unitType: string | null;
     amount: number;
+    startedAt: string | null;
+    endedAt: string | null;
     pricingSnapshot: Record<string, unknown>;
     pricingDetail: Record<string, unknown>;
   }>> {
@@ -30,28 +39,50 @@ export class OrderRepository {
       orderNo: string;
       sessionId: string;
       userId: string;
+      userDisplayName: string | null;
+      userMobile: string | null;
       billingPackageId: string;
+      billingPackageName: string | null;
+      wellCode: string | null;
+      wellDisplayName: string | null;
       status: string;
       settlementStatus: string;
       chargeDurationSec: number | null;
+      chargeVolume: number | null;
+      unitType: string | null;
       amount: number;
+      startedAt: string | null;
+      endedAt: string | null;
       pricingSnapshot: Record<string, unknown>;
       pricingDetail: Record<string, unknown>;
     }>(`
       select
-        id,
-        order_no as "orderNo",
-        session_id as "sessionId",
-        user_id as "userId",
-        billing_package_id as "billingPackageId",
-        status,
-        settlement_status as "settlementStatus",
-        charge_duration_sec as "chargeDurationSec",
-        amount,
-        pricing_snapshot_json as "pricingSnapshot",
-        pricing_detail_json as "pricingDetail"
-      from irrigation_order
-      order by created_at desc
+        io.id,
+        io.order_no as "orderNo",
+        io.session_id as "sessionId",
+        io.user_id as "userId",
+        su.display_name as "userDisplayName",
+        su.mobile as "userMobile",
+        io.billing_package_id as "billingPackageId",
+        bp.package_name as "billingPackageName",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        io.status,
+        io.settlement_status as "settlementStatus",
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        bp.unit_type as "unitType",
+        io.amount,
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        io.pricing_snapshot_json as "pricingSnapshot",
+        io.pricing_detail_json as "pricingDetail"
+      from irrigation_order io
+      join sys_user su on su.id = io.user_id
+      join runtime_session rs on rs.id = io.session_id
+      join well w on w.id = rs.well_id
+      join billing_package bp on bp.id = io.billing_package_id
+      order by io.created_at desc
     `);
     return result.rows;
   }
@@ -97,21 +128,42 @@ export class OrderRepository {
       id: string;
       orderNo: string;
       sessionId: string;
+      wellCode: string | null;
+      wellDisplayName: string | null;
+      billingPackageName: string | null;
+      unitType: string | null;
+      startedAt: string | null;
+      endedAt: string | null;
       status: string;
       settlementStatus: string;
+      chargeDurationSec: number | null;
+      chargeVolume: number | null;
       amount: number;
+      pricingDetail: Record<string, unknown>;
     }>(
       `
       select
-        id,
-        order_no as "orderNo",
-        session_id as "sessionId",
-        status,
-        settlement_status as "settlementStatus",
-        amount
-      from irrigation_order
-      where user_id = $1
-      order by created_at desc
+        io.id,
+        io.order_no as "orderNo",
+        io.session_id as "sessionId",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        bp.package_name as "billingPackageName",
+        bp.unit_type as "unitType",
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        io.status,
+        io.settlement_status as "settlementStatus",
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        io.amount,
+        io.pricing_detail_json as "pricingDetail"
+      from irrigation_order io
+      join runtime_session rs on rs.id = io.session_id
+      join well w on w.id = rs.well_id
+      join billing_package bp on bp.id = io.billing_package_id
+      where io.user_id = $1
+      order by io.created_at desc
       `,
       [userId]
     );

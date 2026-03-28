@@ -1,0 +1,26 @@
+{
+  "register": {
+    "protocol_version": "tcp-json-v1",
+    "imei": "860000000000001",
+    "msg_id": "MSG-REG-001",
+    "seq_no": 1,
+    "msg_type": "REGISTER",
+    "device_ts": "2026-03-22T08:00:00Z",
+    "payload": {
+      "firmware": "1.0.0"
+    }
+  },
+  "runtime_tick": {
+    "protocol_version": "tcp-json-v1",
+    "imei": "860000000000001",
+    "msg_id": "MSG-TICK-001",
+    "seq_no": 2,
+    "msg_type": "RUNTIME_TICK",
+    "device_ts": "2026-03-22T08:01:00Z",
+    "session_ref": "SES-REF-S01",
+    "cumulative_runtime_sec": 60,
+    "cumulative_energy_wh": 200,
+    "cumulative_flow": 1.2,
+    "payload": {}
+  }
+}

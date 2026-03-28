@@ -1,4 +1,4 @@
-# Lovable <-> Codex Sync
+﻿# Lovable <-> Codex Sync
 
 Status: active  
 Purpose: fixed handoff file for frontend / backend integration questions in Phase 1  
@@ -141,21 +141,21 @@ Owner:
 ## Canonical references
 
 - Domain layering:
-  - [domain-region-project-asset-device-v2.md](D:\20251211\zhinengti\houjinongfuai\docs\uat\domain-region-project-asset-device-v2.md)
+  - [domain-region-project-asset-device-v2.md](./domain-region-project-asset-device-v2.md)
 - Relation model:
-  - [relation-model-v2.md](D:\20251211\zhinengti\houjinongfuai\docs\uat\relation-model-v2.md)
+  - [relation-model-v2.md](./relation-model-v2.md)
 - Location model:
-  - [location-model-v1.md](D:\20251211\zhinengti\houjinongfuai\docs\uat\location-model-v1.md)
+  - [location-model-v1.md](./location-model-v1.md)
 - Current API / page compatibility mapping:
-  - [domain-compat-mapping-v1.md](D:\20251211\zhinengti\houjinongfuai\docs\uat\domain-compat-mapping-v1.md)
+  - [domain-compat-mapping-v1.md](./domain-compat-mapping-v1.md)
 - Frontend / backend contract checklist:
-  - [frontend-backend-contract-checklist-v1.md](D:\20251211\zhinengti\houjinongfuai\docs\uat\frontend-backend-contract-checklist-v1.md)
+  - [frontend-backend-contract-checklist-v1.md](./frontend-backend-contract-checklist-v1.md)
 - PM workflow:
-  - [delivery-workflow.md](D:\20251211\zhinengti\houjinongfuai\docs\governance\delivery-workflow.md)
+  - [delivery-workflow.md](../governance/delivery-workflow.md)
 - Document system:
-  - [document-system.md](D:\20251211\zhinengti\houjinongfuai\docs\governance\document-system.md)
+  - [document-system.md](../governance/document-system.md)
 - Historical exploratory CRUD docs:
-  - moved to [README.md](D:\20251211\zhinengti\houjinongfuai\docs\archive\uat\README.md)
+  - moved to [README.md](../archive/uat/README.md)
 
 ## Triage rule
 

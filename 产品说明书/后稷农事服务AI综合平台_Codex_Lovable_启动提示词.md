@@ -1,4 +1,4 @@
-# 后稷农事服务AI综合平台：Codex / Lovable 启动提示词
+﻿# 后稷农事服务AI综合平台：Codex / Lovable 启动提示词
 
 ## 1. 给 Codex 的第一条任务
 

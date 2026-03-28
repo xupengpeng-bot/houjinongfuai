@@ -1,0 +1,12 @@
+scenario_code: offline_timeout_auto_end
+imei: "860000000000003"
+steps:
+  - at_ms: 0
+    direction: up
+    msg_type: REGISTER
+  - at_ms: 60000
+    direction: up
+    msg_type: RUNTIME_TICK
+  - at_ms: 720000
+    direction: up
+    msg_type: HEARTBEAT

@@ -1,12 +1,12 @@
-# Lovable 指令
+﻿# Lovable 指令
 
 ## 元信息
 
 - 编号：`2026-03-22-001`
 - 日期：`2026-03-22`
 - 主题：`Phase 1 真实联调前端收口修复`
-- 前端仓库：`D:\20251211\zhinengti\lovable`
-- 来源仓库：`D:\20251211\zhinengti\houjinongfuai`
+- 前端仓库：`..\lovable`
+- 来源仓库：`.`
 - 状态：`待 Lovable 执行`
 
 ## 目标

@@ -360,6 +360,106 @@ export class RuntimeService {
     });
   }
 
+  async createSessionFromWellIdentifier(wellIdentifier: string) {
+    const decision = await this.createStartDecisionForWellIdentifier(wellIdentifier);
+
+    if (decision.result !== 'allow') {
+      throw new AppException(
+        (decision.blockingReasons[0]?.code as any) ?? ErrorCodes.DECISION_NOT_ALLOWED,
+        decision.blockingReasons[0]?.message ?? 'Runtime decision is not allowed',
+        400,
+        {
+          result: decision.result,
+          decisionId: decision.decisionId,
+          blockingReasons: decision.blockingReasons,
+          availableActions: decision.availableActions,
+          pricePreview: decision.pricePreview
+        }
+      );
+    }
+
+    return this.createSession(decision.decisionId);
+  }
+
+  async createStartDecisionForWellIdentifier(wellIdentifier: string) {
+    const resolvedWellId = await this.runtimeRepository.findWellIdByIdentifier(wellIdentifier);
+    if (!resolvedWellId) {
+      throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Target well was not found', 404, {
+        targetId: wellIdentifier
+      });
+    }
+
+    return this.runtimeDecisionService.createStartDecision({
+      targetType: 'well',
+      targetId: resolvedWellId,
+      sceneCode: 'farmer_scan_start'
+    });
+  }
+
+  async getCurrentSession() {
+    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser();
+    const session = await this.runtimeRepository.findCurrentSessionByUserId(runtimeUser.id);
+    if (!session) {
+      return null;
+    }
+
+    const durationSeconds =
+      session.chargeDurationSec ??
+      (session.startedAt
+        ? Math.max(
+            1,
+            Math.ceil((Date.now() - new Date(session.startedAt).getTime()) / 1000)
+          )
+        : 0);
+
+    const pricingDetail = (session.pricingDetail ?? {}) as Record<string, any>;
+    const unit = String(pricingDetail.unit ?? session.unitType ?? 'minute');
+    const usage =
+      session.chargeVolume ??
+      Number(pricingDetail.usage?.volume ?? pricingDetail.usage?.duration_seconds ?? 0);
+
+    return {
+      id: session.id,
+      well_name: session.wellDisplayName ?? session.wellCode ?? session.wellId,
+      status: session.status === 'running' ? 'running' : 'ended',
+      usage: Number(usage ?? 0),
+      unit,
+      duration_minutes: Math.max(1, Math.ceil(durationSeconds / 60)),
+      cost: Number(session.amount ?? 0),
+      billing_package: session.billingPackageName ?? '--',
+      unit_price: Number(pricingDetail.unit_price ?? 0)
+    };
+  }
+
+  async listSessions() {
+    return this.runtimeRepository.findAllSessions();
+  }
+
+  async listCommands() {
+    return this.runtimeRepository.findAllCommands();
+  }
+
+  async listRuntimeContainers() {
+    return [
+      {
+        id: 'runtime-api',
+        name: 'Runtime API',
+        status: 'running',
+        cpu: '0.2 vCPU',
+        mem: '128 MB',
+        uptime: 'local-dev'
+      },
+      {
+        id: 'postgres',
+        name: 'PostgreSQL',
+        status: 'running',
+        cpu: '0.3 vCPU',
+        mem: '256 MB',
+        uptime: 'docker'
+      }
+    ];
+  }
+
   async stopSession(sessionId: string) {
     const runtimeUser = await this.runtimeDecisionService.getRuntimeUser();
 

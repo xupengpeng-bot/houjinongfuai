@@ -64,9 +64,9 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
   - `COD-2026-03-27-021` fixed `LVB-4036` handoff synced to frontend Git `origin/main` at `688bf6c`
   - `COD-2026-03-27-022` partial `LVB-4036` VERIFY at frontend Git `HEAD` `248a83b`
   - `COD-2026-03-27-023` fixed `LVB-4037` handoff synced to frontend Git `origin/main` at `150ea28`
-  - `COD-2026-03-27-029` fixed device-domain integration enhancement second batch（见 **`docs/codex/RESULT.md`**）
-  - `COD-2026-03-27-034` fixed dispatch task sequencing + safe `auto_activate_next`（见 **`docs/codex/RESULT.md`**）
-  - `COD-2026-03-27-035` **全量收口**（泵阀/网模/solver/资产设备空间读模型，见 **`docs/codex/RESULT.md`**）
+  - `COD-2026-03-27-029` fixed device-domain integration enhancement second batch; see `docs/codex/RESULT.md`
+  - `COD-2026-03-27-034` fixed dispatch task sequencing + safe `auto_activate_next`; see `docs/codex/RESULT.md`
+  - `COD-2026-03-27-035` all-scope closure completed; see `docs/codex/RESULT.md`
 - active task
   - none
 
@@ -87,20 +87,26 @@ Purpose: this is the only live execution entry for Cursor. When PM or the user s
 
 ## Allowed working area
 
-- `D:\20251211\zhinengti\houjinongfuai\docs`
-- `D:\20251211\zhinengti\houjinongfuai\backend`
+- `./docs`
+- `./backend`
+
+Path rule:
+
+- interpret paths relative to this repository root unless a task file freezes a different location
+- for frontend `SYNC` or `VERIFY`, use the sibling repo `../lovable`
 
 Do not modify other directories unless PM updates this file.
 
 ## Execute now
 
-- Wait for PM to set **`active task`**。上一任务：**`COD-2026-03-27-035`**（泵阀拓扑 V1 与 solver 读模型）。
+- Wait for PM to set `active task`.
+- If `active task = none`, report `no active task` and stop.
 
 ## Hard constraints
 
 - Do not reopen architecture.
 - Do not modify frontend business code unless PM opens a new task.
-- Backend-only batch unless PM re-opens **`lovable`** paths.
+- Backend-only batch unless PM re-opens `lovable` paths.
 
 ## Result writeback
 

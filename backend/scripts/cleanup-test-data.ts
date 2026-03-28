@@ -61,6 +61,13 @@ async function main() {
     { label: 'command_dispatch', sql: 'delete from command_dispatch' },
     { label: 'session_status_log', sql: 'delete from session_status_log' },
     { label: 'irrigation_order', sql: 'delete from irrigation_order' },
+    { label: 'network_pipe', sql: 'delete from network_pipe' },
+    { label: 'network_node', sql: 'delete from network_node' },
+    { label: 'network_model_version', sql: 'delete from network_model_version' },
+    { label: 'network_model', sql: 'delete from network_model' },
+    { label: 'data_scope_policy', sql: 'delete from data_scope_policy' },
+    { label: 'metering_point', sql: 'delete from metering_point' },
+    { label: 'project_block', sql: 'delete from project_block' },
     { label: 'runtime_session', sql: 'delete from runtime_session' },
     { label: 'runtime_decision', sql: 'delete from runtime_decision' },
     { label: 'runtime_container', sql: 'delete from runtime_container' },
@@ -122,6 +129,7 @@ async function main() {
 
   const client = await pool.connect();
   try {
+    const regionReferenceBefore = await countTable(pool, 'region_reference');
     await client.query('begin');
 
     const results: CleanupResult[] = [];
@@ -134,6 +142,13 @@ async function main() {
     }
 
     await client.query('commit');
+
+    const regionReferenceAfter = await countTable(pool, 'region_reference');
+    if (regionReferenceAfter !== regionReferenceBefore) {
+      throw new Error(
+        `region_reference guard violated during cleanup: before=${regionReferenceBefore}, after=${regionReferenceAfter}`
+      );
+    }
 
     const finalCounts: Record<string, number> = {};
     for (const tableName of finalCountTables) {

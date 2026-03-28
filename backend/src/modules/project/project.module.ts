@@ -114,6 +114,32 @@ class ProjectService {
   constructor(private readonly db: DatabaseService) {}
 
   private async generateProjectCode(client: PoolClient) {
+    await this.db.query(
+      `
+      select setval(
+        'project_code_seq',
+        greatest(
+          coalesce(
+            (
+              select max(substring(project_code from '([0-9]+)$')::int)
+              from project
+              where tenant_id = $1
+                and project_code like $2
+            ),
+            0
+          ),
+          (
+            select last_value
+            from project_code_seq
+          )
+        ),
+        true
+      )
+      `,
+      [TENANT_ID, `${PROJECT_CODE_PREFIX}%`],
+      client
+    );
+
     const result = await this.db.query<{ next_code: string }>(
       `
       select $1 || lpad(nextval('project_code_seq')::text, 3, '0') as next_code

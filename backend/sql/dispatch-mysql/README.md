@@ -1,4 +1,4 @@
-# Dispatch MySQL patches
+﻿# Dispatch MySQL patches
 
 These SQL files apply to the **MySQL** database that holds `dispatch_task` / `dispatch_team_current` (not the main Postgres `DATABASE_URL`).
 

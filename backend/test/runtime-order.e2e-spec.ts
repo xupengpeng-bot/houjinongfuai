@@ -1,20 +1,21 @@
 import { INestApplication, ValidationPipe } from '@nestjs/common';
 import { Test } from '@nestjs/testing';
 import * as request from 'supertest';
-import { readFileSync } from 'fs';
+import { readFileSync, readdirSync } from 'fs';
 import { join } from 'path';
 import { AppModule } from '../src/app.module';
 import { DatabaseService } from '../src/common/db/database.service';
 import { AppExceptionFilter } from '../src/common/http/app-exception.filter';
+import { SCENARIOS } from './support/seed-scenarios';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const PRIMARY_USER_ID = '00000000-0000-0000-0000-000000000101';
 const ALT_USER_ID = '00000000-0000-0000-0000-000000000103';
-const HAPPY_VALVE_ID = '00000000-0000-0000-0000-000000000701';
-const OFFLINE_VALVE_ID = '00000000-0000-0000-0000-000000000702';
-const FALLBACK_VALVE_ID = '00000000-0000-0000-0000-000000000703';
-const POLICY_MISSING_VALVE_ID = '00000000-0000-0000-0000-000000000704';
-const FREE_VALVE_ID = '00000000-0000-0000-0000-000000000705';
+const HAPPY_VALVE_ID = SCENARIOS.S01.objects.valveId;
+const OFFLINE_VALVE_ID = SCENARIOS.S04.objects.valveId;
+const FALLBACK_VALVE_ID = SCENARIOS.S08.objects.valveId;
+const POLICY_MISSING_VALVE_ID = SCENARIOS.S03.objects.valveId;
+const FREE_VALVE_ID = SCENARIOS.S05.objects.valveId;
 
 describe('Runtime + Order Phase 1 chain', () => {
   let app: INestApplication;
@@ -38,15 +39,34 @@ describe('Runtime + Order Phase 1 chain', () => {
     app.useGlobalFilters(new AppExceptionFilter());
     await app.init();
     db = app.get(DatabaseService);
-    seedSql = readFileSync(join(__dirname, '../sql/seed/001_phase1_demo.sql'), 'utf8');
+    const seedDir = join(__dirname, '../sql/seed');
+    seedSql = readdirSync(seedDir)
+      .filter((name) => name.endsWith('.sql'))
+      .sort()
+      .map((name) => readFileSync(join(seedDir, name), 'utf8'))
+      .join('\n\n');
   });
 
   beforeEach(async () => {
     await db.query(`
+      delete from order_funding_ledger;
+      delete from order_settlement_slice;
+      delete from device_command;
+      delete from device_message_log;
+      delete from device_connection_session;
+      delete from work_order_action_log;
+      delete from work_order;
+      delete from alarm_event;
+      delete from uat_execution;
+      delete from uat_case;
+      delete from audit_log;
+      delete from operation_log;
+      delete from command_dispatch;
       delete from session_status_log;
       delete from irrigation_order;
       delete from runtime_session;
       delete from runtime_decision;
+      delete from metering_point;
       delete from interaction_policy where tenant_id = '${TENANT_ID}';
       delete from scenario_template where tenant_id = '${TENANT_ID}';
       delete from well_runtime_policy where tenant_id = '${TENANT_ID}';
@@ -60,7 +80,7 @@ describe('Runtime + Order Phase 1 chain', () => {
     await db.query(`
       update device
       set online_state = 'offline'
-      where id = '00000000-0000-0000-0000-000000000406'
+      where id = '${SCENARIOS.S04.objects.offlineDeviceId}'
     `);
   });
 
@@ -151,7 +171,7 @@ describe('Runtime + Order Phase 1 chain', () => {
   });
 
   it('returns deny with policy missing when the fixed fallback chain cannot resolve rules', async () => {
-    const response = await startCheck(POLICY_MISSING_VALVE_ID, 'policy_missing_scene');
+    const response = await startCheck(POLICY_MISSING_VALVE_ID, SCENARIOS.S03.defaultSceneCode);
     expect(response.body.code).toBe('OK');
     expect(response.body.data.result).toBe('deny');
     expect(response.body.data.blockingReasons[0].code).toBe('POLICY_NOT_EFFECTIVE');

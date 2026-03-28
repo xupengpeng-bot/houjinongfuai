@@ -1,4 +1,5 @@
 import { Body, Controller, Get, Module, Param, Patch, Post } from '@nestjs/common';
+import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
 
 interface CreateUserDto {
@@ -13,9 +14,44 @@ interface AssignRolesDto {
 
 @Controller('system')
 class IamController {
+  constructor(private readonly db: DatabaseService) {}
+
   @Get('users')
-  listUsers() {
-    return ok({ items: [] });
+  async listUsers() {
+    const result = await this.db.query(`
+      select
+        u.id,
+        u.display_name as name,
+        lower(replace(u.display_name, ' ', '_')) as username,
+        case
+          when coalesce(sr.role_type, u.user_type) in ('tenant_admin', 'admin', 'project_manager') then 'admin'
+          when coalesce(sr.role_type, u.user_type) in ('operator', 'ops_operator', 'maintenance_operator') then 'operator'
+          else 'farmer'
+        end as role,
+        coalesce(r.region_name, '--') as area,
+        u.mobile as phone,
+        case when u.status = 'active' then 'active' else 'disabled' end as status
+      from sys_user u
+      left join lateral (
+        select r1.role_type
+        from sys_user_role ur
+        join sys_role r1 on r1.id = ur.role_id
+        where ur.user_id = u.id
+        order by r1.created_at asc
+        limit 1
+      ) sr on true
+      left join lateral (
+        select ds.scope_ref_id
+        from sys_user_role ur2
+        join sys_data_scope ds on ds.role_id = ur2.role_id
+        where ur2.user_id = u.id and ds.scope_type = 'region'
+        order by ds.created_at asc
+        limit 1
+      ) scope on true
+      left join region r on r.id = scope.scope_ref_id
+      order by u.created_at asc
+    `);
+    return ok({ items: result.rows });
   }
 
   @Post('users')
@@ -34,13 +70,32 @@ class IamController {
   }
 
   @Get('roles')
-  listRoles() {
-    return ok({ items: [] });
+  async listRoles() {
+    const result = await this.db.query(`
+      select
+        id,
+        role_code as code,
+        role_name as name,
+        role_type as type,
+        status
+      from sys_role
+      order by created_at asc
+    `);
+    return ok({ items: result.rows });
   }
 
   @Get('permissions')
-  listPermissions() {
-    return ok({ items: [] });
+  async listPermissions() {
+    const result = await this.db.query(`
+      select
+        id,
+        permission_code as code,
+        resource_code as resource,
+        action_code as action
+      from sys_permission
+      order by permission_code asc
+    `);
+    return ok({ items: result.rows });
   }
 }
 
