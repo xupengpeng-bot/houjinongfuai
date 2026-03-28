@@ -1,21 +1,43 @@
-# Project Docs Map
+﻿# Project Docs Map
 
 Status: active
 Audience: PM, Codex, Lovable, embedded, hardware, QA
-Purpose: define which docs are canonical, which are historical, and the reading order for this repository.
+Purpose: separate business requirements from development-system execution docs and define the reading order for this repository.
 
-## Active reading order
+## Business-doc reading order
 
 1. `AGENTS.md`
-2. `docs/p1/README.md`
-3. `docs/protocol/device-protocol-v1.md`
-4. `docs/protocol/device-event-model-v1.md`
-5. `docs/uat/frontend-backend-contract-checklist-v1.md`
-6. `docs/uat/lovable-codex-sync.md`
-7. `docs/governance/file-only-command-protocol.md`
-8. `docs/governance/delivery-workflow.md`
+2. `docs/requirements/README.md`
+3. `docs/系统说明/README.md`
+4. `docs/p1/README.md`
+5. `docs/protocol/device-protocol-v1.md`
+6. `docs/protocol/device-event-model-v1.md`
+7. `docs/uat/README.md`
+8. `docs/lovable/README.md`
+
+## Development-system entry
+
+AI task dispatch, onboarding, execution modes, and workflow governance have been moved out of this business repository.
+
+Use this external workspace:
+
+- `D:\20251211\zhinengti\development-system\projects\houjinongfuai`
+
+Read there when you need:
+
+- `CURRENT.md`
+- `RESULT.md`
+- work modes
+- task types
+- dispatch protocol
+- delivery workflow
 
 ## Active folders
+
+- `docs/requirements`
+  - human-facing requirement entry and reading order.
+- `docs/系统说明`
+  - current formal business requirement truth and product rules.
 
 - `docs/p1`
   - Phase 1 scope, model, state, API, schema, and module baseline.
@@ -25,8 +47,12 @@ Purpose: define which docs are canonical, which are historical, and the reading 
   - Current domain freeze, compatibility mapping, contract checklist, UAT plan, and active Codex/Lovable sync.
 - `docs/lovable`
   - Active frontend integration notes only.
+- `docs/devtools`
+  - bridge only; shared development-system rules now live in `D:\20251211\zhinengti\development-system\shared`.
 - `docs/governance`
-  - PM-facing document system, file-only execution protocol, communication review, and delivery workflow.
+  - bridge only; the active development-governance docs now live in the external development-system workspace.
+- `docs/codex`
+  - bridge only; the active AI task-dispatch docs now live in the external development-system workspace.
 
 ## Historical folders
 
@@ -38,7 +64,21 @@ Purpose: define which docs are canonical, which are historical, and the reading 
 - A document in `docs/archive` is not a live source of truth.
 - Prototype docs must not be used as runtime API truth.
 - If an active doc conflicts with an archived doc, the active doc wins.
-- If two active docs conflict, follow `AGENTS.md`, then `docs/p1`, then `docs/uat/frontend-backend-contract-checklist-v1.md`, then `docs/uat/lovable-codex-sync.md`.
+- If two active business docs conflict, follow `AGENTS.md`, then `docs/系统说明`, then `docs/p1`, then `docs/uat/frontend-backend-contract-checklist-v1.md`, then `docs/uat/lovable-codex-sync.md`.
+
+## Requirement vs task rule
+
+- Business requirements are for humans.
+  - They describe overall goals, scope, functional points, object relationships, and acceptance expectations.
+- AI task instructions are for execution.
+  - They live in the external development-system workspace.
+- The correct order is:
+  1. confirm or update business requirements in this repository
+  2. freeze the requirement scope
+  3. decompose the confirmed scope into typed AI tasks in the development-system workspace
+  4. execute and verify
+
+Do not use AI task sheets as a replacement for business requirement documentation.
 
 ## Shared Environment Reset Rule
 

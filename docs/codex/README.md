@@ -1,18 +1,19 @@
-﻿# Codex Docs
+# Codex Docs Moved
 
-Status: active
-Audience: PM and 软件工程师
-Purpose: describe the live software-engineer execution entry and the two fixed work modes.
+Status: bridge
+Audience: PM, software engineer, Cursor, Codex
 
-Historical Codex task sheets have been moved to `docs/archive/codex`.
+The software-engineer development-system docs have been moved out of this business Git repository.
 
-Live software-engineer work is dispatched through:
+New location:
 
-- `docs/codex/CURRENT.md`
-- `docs/codex/RESULT.md`
-- `docs/codex/WORK-MODES.md`
-- `docs/governance/file-only-command-protocol.md`
-- `docs/governance/delivery-workflow.md`
-- `docs/uat/lovable-codex-sync.md` when frontend expectations change
+- `D:\20251211\zhinengti\development-system\projects\houjinongfuai\docs\codex`
 
-When PM or the user says only "execute", 软件工程师 must read `docs/codex/CURRENT.md` first.
+Use that sibling development-system directory for:
+
+- onboarding
+- current task dispatch
+- work modes
+- task types
+- result writeback
+- cloud/local development workflow

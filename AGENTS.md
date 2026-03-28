@@ -4,6 +4,15 @@
 
 - Repository: the currently opened repository root
 - Current phase: `Phase 1`
+- Development-system docs for this project are maintained in the sibling workspace:
+  - `D:\20251211\zhinengti\development-system\projects\houjinongfuai`
+- Treat that sibling workspace as the source for:
+  - onboarding
+  - dispatch
+  - work modes
+  - governance
+  - task-system rules
+- Treat this repository as the business-code workspace.
 
 ## Fixed boundaries
 
