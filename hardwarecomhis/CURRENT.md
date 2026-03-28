@@ -33,6 +33,12 @@ Do not modify backend, frontend, or embedded directories unless PM changes this 
 
 - Do not execute now.
 - Wait until PM changes this file from `paused` to `active`.
+- On a new machine or new bench environment, first ask PM / user to confirm the actual tool paths before flash, debug, or serial-interface work.
+- Minimum confirmation set:
+  - `openocd`
+  - `st-flash` or `STM32_Programmer_CLI`
+  - `J-Link` tools when SEGGER tooling is involved
+  - serial-terminal tool path when UART observation is needed
 
 ## Result writeback
 

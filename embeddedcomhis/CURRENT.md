@@ -33,6 +33,13 @@ Do not modify backend, frontend, or hardware directories unless PM changes this 
 
 - Do not execute now.
 - Wait until PM changes this file from `paused` to `active`.
+- On a new machine or new bench environment, first ask PM / user to confirm the actual tool paths before build, flash, debug, or serial work.
+- Minimum confirmation set:
+  - `arm-none-eabi-gcc`
+  - `openocd`
+  - `st-flash` or `STM32_Programmer_CLI`
+  - `stm32flash` when serial flashing is needed
+  - serial-terminal tool path when UART observation is needed
 
 ## Result writeback
 
