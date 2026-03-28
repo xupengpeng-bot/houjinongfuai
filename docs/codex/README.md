@@ -9,6 +9,10 @@ New location:
 
 - `D:\20251211\zhinengti\development-system\projects\houjinongfuai\docs\codex`
 
+Bootstrap helper kept in this repository:
+
+- `D:\20251211\zhinengti\houjinongfuai\docs\codex\MAIN-CODEX-BOOTSTRAP.md`
+
 Use that sibling development-system directory for:
 
 - onboarding
