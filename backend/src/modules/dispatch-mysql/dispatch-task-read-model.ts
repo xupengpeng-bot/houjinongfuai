@@ -6,6 +6,7 @@ import type { RowDataPacket } from 'mysql2';
 export interface DispatchTaskReadModel {
   task_id: string;
   team: string;
+  task_type: string | null;
   title: string | null;
   mode: string | null;
   status: string;
@@ -44,6 +45,7 @@ export function buildDispatchTaskReadModel(row: RowDataPacket): DispatchTaskRead
   const base: DispatchTaskReadModel = {
     task_id: String(row.task_id),
     team: String(row.team),
+    task_type: row.task_type != null ? String(row.task_type) : null,
     title: row.title != null ? String(row.title) : null,
     mode: row.mode != null ? String(row.mode) : null,
     status: String(row.status),

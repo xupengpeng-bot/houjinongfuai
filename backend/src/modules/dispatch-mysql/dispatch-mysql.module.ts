@@ -61,6 +61,16 @@ class DispatchMysqlController {
     return ok(row);
   }
 
+  /** Minimal one-shot bootstrap for agents: lane state + active task read model. */
+  @Get('team/:team/bootstrap')
+  async teamBootstrap(@Param('team') team: string) {
+    const model = await this.dispatch.getTeamBootstrap(team);
+    if (!model) {
+      throw new NotFoundException(`no dispatch_team_current row for team=${team}`);
+    }
+    return ok(model);
+  }
+
   /** Prefer this for execution: structured fields + optional legacy markdown. */
   @Get('task/:taskId/state')
   async taskState(@Param('taskId') taskId: string) {

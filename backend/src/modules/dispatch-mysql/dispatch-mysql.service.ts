@@ -18,6 +18,12 @@ import {
 } from './dispatch-mysql.dto';
 import { buildDispatchTaskReadModel, type DispatchTaskReadModel } from './dispatch-task-read-model';
 
+export interface DispatchTeamBootstrapModel {
+  source_of_truth: 'dispatch_db';
+  team: RowDataPacket;
+  active_task: DispatchTaskReadModel | null;
+}
+
 /**
  * MySQL `dispatch_*` access (separate from main Postgres `DATABASE_URL`).
  * Reads always allowed when pool is configured; writes require `DISPATCH_DB_WRITE_ENABLED=true`.
@@ -110,6 +116,21 @@ export class DispatchMysqlService implements OnModuleDestroy {
     const row = await this.getTask(taskId);
     if (!row) return null;
     return buildDispatchTaskReadModel(row);
+  }
+
+  async getTeamBootstrap(team: string): Promise<DispatchTeamBootstrapModel | null> {
+    const teamRow = await this.getTeamCurrent(team);
+    if (!teamRow) return null;
+    const activeTaskId =
+      teamRow.active_task_id != null && String(teamRow.active_task_id).trim() !== ''
+        ? String(teamRow.active_task_id).trim()
+        : null;
+    const activeTask = activeTaskId ? await this.getTaskReadModel(activeTaskId) : null;
+    return {
+      source_of_truth: 'dispatch_db',
+      team: teamRow,
+      active_task: activeTask
+    };
   }
 
   async updateTaskSequencing(

@@ -12,6 +12,7 @@ describe('dispatch-task-read-model', () => {
     const row = {
       task_id: 'T1',
       team: 'cursor',
+      task_type: 'ENGINEERING',
       title: 't',
       mode: 'BACKEND',
       status: 'active',
@@ -24,6 +25,7 @@ describe('dispatch-task-read-model', () => {
       created_at: new Date()
     };
     const m = buildDispatchTaskReadModel(row as any);
+    expect(m.task_type).toBe('ENGINEERING');
     expect(m.summary).toEqual({ goal: 'g', steps: ['a'] });
     expect(m.payload_md_legacy).toBeUndefined();
     expect(m.artifact_ref).toBe('ref/1');
@@ -33,6 +35,7 @@ describe('dispatch-task-read-model', () => {
     const row = {
       task_id: 'T2',
       team: 'cursor',
+      task_type: 'LANGUAGE',
       title: 't',
       mode: 'VERIFY',
       status: 'active',
@@ -45,6 +48,7 @@ describe('dispatch-task-read-model', () => {
       created_at: new Date()
     };
     const m = buildDispatchTaskReadModel(row as any);
+    expect(m.task_type).toBe('LANGUAGE');
     expect(m.summary).toBeNull();
     expect(m.payload_md_legacy).toContain('# Title');
   });
@@ -53,6 +57,7 @@ describe('dispatch-task-read-model', () => {
     const row = {
       task_id: 'T3',
       team: 'cursor',
+      task_type: 'ENGINEERING',
       title: 't',
       mode: 'BACKEND',
       status: 'synced_ready',
@@ -68,6 +73,7 @@ describe('dispatch-task-read-model', () => {
       created_at: new Date()
     };
     const m = buildDispatchTaskReadModel(row as any);
+    expect(m.task_type).toBe('ENGINEERING');
     expect(m.next_task_id).toBe('COD-NEXT');
     expect(m.depends_on_task_id).toBeNull();
     expect(m.queue_order).toBe(10);
