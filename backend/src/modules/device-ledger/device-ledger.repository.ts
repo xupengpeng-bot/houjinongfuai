@@ -101,7 +101,7 @@ export class DeviceLedgerRepository {
   }): Promise<{ items: LedgerDeviceRow[]; total: number }> {
     const { tenantId, page, pageSize, projectId, assetId, deviceTypeId, q } = params;
     const offset = (page - 1) * pageSize;
-    const conds: string[] = ['d.tenant_id = $1'];
+    const conds: string[] = ['d.tenant_id = $1', `d.lifecycle_state <> 'archived'`];
     const args: unknown[] = [tenantId];
     let p = 2;
 
@@ -153,7 +153,7 @@ export class DeviceLedgerRepository {
   async findById(tenantId: string, id: string): Promise<LedgerDeviceRow | null> {
     const result = await this.db.query<LedgerDeviceRow>(
       `${this.baseSelect()}
-       where d.tenant_id = $1 and d.id = $2`,
+       where d.tenant_id = $1 and d.id = $2 and d.lifecycle_state <> 'archived'`,
       [tenantId, id]
     );
     return result.rows[0] ?? null;
@@ -283,14 +283,14 @@ export class DeviceLedgerRepository {
     return r.rowCount !== null && r.rowCount > 0;
   }
 
-  /** Only draft devices can be archived (conservative Phase 1 rule). */
+  /** Soft-delete: archive any non-archived device (draft, active, etc.). */
   async softArchive(tenantId: string, id: string): Promise<boolean> {
     const r = await this.db.query(
       `
       update device
       set lifecycle_state = 'archived', updated_at = now()
       where tenant_id = $1 and id = $2
-        and lifecycle_state = 'draft'
+        and lifecycle_state <> 'archived'
       `,
       [tenantId, id]
     );

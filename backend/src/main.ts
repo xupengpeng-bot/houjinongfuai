@@ -10,7 +10,7 @@ async function bootstrap() {
   const devOrigins = process.env.NODE_ENV !== 'production';
   app.enableCors({
     origin: devOrigins
-      ? (origin, callback) => {
+      ? (origin: string | undefined, callback: (err: Error | null, allow?: boolean) => void) => {
           if (!origin) return callback(null, true);
           try {
             const u = new URL(origin);
