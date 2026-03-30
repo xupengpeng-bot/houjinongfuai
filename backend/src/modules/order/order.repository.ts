@@ -7,6 +7,20 @@ import { DatabaseService } from '../../common/db/database.service';
 export class OrderRepository {
   constructor(private readonly db: DatabaseService) {}
 
+  /** 与 runtime 决策使用的用户一致（当前无 JWT 真源时的 Phase1 约定） */
+  async findDefaultFarmerUserId(): Promise<string | null> {
+    const result = await this.db.query<{ id: string }>(
+      `
+      select id
+      from sys_user
+      where user_type = 'farmer' and status = 'active'
+      order by created_at asc
+      limit 1
+      `
+    );
+    return result.rows[0]?.id ?? null;
+  }
+
   private isUniqueViolation(error: unknown, constraintName: string) {
     const candidate = error as { code?: string; constraint?: string };
     return candidate?.code === '23505' && candidate?.constraint === constraintName;
@@ -170,9 +184,64 @@ export class OrderRepository {
     return result.rows;
   }
 
+  async findByUserIdPage(userId: string, page: number, pageSize: number) {
+    const offset = (Math.max(1, page) - 1) * Math.max(1, pageSize);
+    const limit = Math.min(100, Math.max(1, pageSize));
+    const result = await this.db.query<{
+      id: string;
+      orderNo: string;
+      sessionId: string;
+      wellCode: string | null;
+      wellDisplayName: string | null;
+      billingPackageName: string | null;
+      unitType: string | null;
+      startedAt: string | null;
+      endedAt: string | null;
+      status: string;
+      settlementStatus: string;
+      chargeDurationSec: number | null;
+      chargeVolume: number | null;
+      amount: number;
+      pricingDetail: Record<string, unknown>;
+      total: string;
+    }>(
+      `
+      select
+        io.id,
+        io.order_no as "orderNo",
+        io.session_id as "sessionId",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        bp.package_name as "billingPackageName",
+        bp.unit_type as "unitType",
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        io.status,
+        io.settlement_status as "settlementStatus",
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        io.amount,
+        io.pricing_detail_json as "pricingDetail",
+        count(*) over()::text as total
+      from irrigation_order io
+      join runtime_session rs on rs.id = io.session_id
+      join well w on w.id = rs.well_id
+      join billing_package bp on bp.id = io.billing_package_id
+      where io.user_id = $1
+      order by io.created_at desc
+      offset $2
+      limit $3
+      `,
+      [userId, offset, limit]
+    );
+    const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total, 10) : 0;
+    return { rows: result.rows.map(({ total: _t, ...row }) => row), total };
+  }
+
   async findBySessionId(sessionId: string, client?: PoolClient) {
     const result = await this.db.query<{
       id: string;
+      tenantId: string;
       orderNo: string;
       sessionId: string;
       userId: string;
@@ -181,12 +250,15 @@ export class OrderRepository {
       settlementStatus: string;
       chargeDurationSec: number | null;
       amount: number;
+      orderChannel: string | null;
+      fundingMode: string | null;
       pricingSnapshot: Record<string, unknown>;
       pricingDetail: Record<string, unknown>;
     }>(
       `
       select
         id,
+        tenant_id as "tenantId",
         order_no as "orderNo",
         session_id as "sessionId",
         user_id as "userId",
@@ -195,6 +267,8 @@ export class OrderRepository {
         settlement_status as "settlementStatus",
         charge_duration_sec as "chargeDurationSec",
         amount,
+        order_channel as "orderChannel",
+        funding_mode as "fundingMode",
         pricing_snapshot_json as "pricingSnapshot",
         pricing_detail_json as "pricingDetail"
       from irrigation_order
@@ -214,6 +288,8 @@ export class OrderRepository {
     billingPackageId: string;
     pricingSnapshot: Record<string, unknown>;
     pricingDetail: Record<string, unknown>;
+    orderChannel?: string | null;
+    fundingMode?: string | null;
   }, client: PoolClient) {
     const orderNo = `ord_${Date.now()}`;
     try {
@@ -221,10 +297,12 @@ export class OrderRepository {
         `
         insert into irrigation_order (
           id, tenant_id, order_no, session_id, user_id, billing_package_id,
-          status, settlement_status, amount, pricing_snapshot_json, pricing_detail_json
+          status, settlement_status, amount, order_channel, funding_mode,
+          pricing_snapshot_json, pricing_detail_json
         ) values (
           $1, $2, $3, $4, $5, $6,
-          'created', 'unpaid', 0, $7::jsonb, $8::jsonb
+          'created', 'unpaid', 0, $7, $8,
+          $9::jsonb, $10::jsonb
         )
         returning id, order_no as "orderNo"
         `,
@@ -235,6 +313,8 @@ export class OrderRepository {
           input.sessionId,
           input.userId,
           input.billingPackageId,
+          input.orderChannel ?? null,
+          input.fundingMode ?? null,
           JSON.stringify(input.pricingSnapshot),
           JSON.stringify(input.pricingDetail)
         ],

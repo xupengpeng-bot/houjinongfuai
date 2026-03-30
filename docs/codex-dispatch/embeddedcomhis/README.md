@@ -5,8 +5,8 @@ Audience: PM and 嵌入式工程师
 
 ## Official live entry
 
-- `embeddedcomhis/CURRENT.md`
-- `embeddedcomhis/RESULT.md`
+- `docs/codex-dispatch/embeddedcomhis/CURRENT.md`
+- `docs/codex-dispatch/embeddedcomhis/RESULT.md`
 
 When PM or the user says only "execute", 嵌入式工程师 must read `CURRENT.md` first and write back to `RESULT.md`.
 
@@ -18,7 +18,7 @@ When PM or the user says only "execute", 嵌入式工程师 must read `CURRENT.m
 
 ## Reading order
 
-1. read `embeddedcomhis/CURRENT.md`
+1. read `docs/codex-dispatch/embeddedcomhis/CURRENT.md`
 2. read the linked task file
 3. read the matching context file
 4. read the matching fixtures

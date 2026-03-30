@@ -152,6 +152,7 @@ export class RuntimeRepository {
     wellId: string;
     pumpId: string;
     valveId: string;
+    sessionRef: string | null;
     sourceDecisionId: string;
     telemetrySnapshot: Record<string, unknown>;
   }, client: PoolClient) {
@@ -161,20 +162,21 @@ export class RuntimeRepository {
       const result = await this.db.query<{
         id: string;
         sessionNo: string;
+        sessionRef: string | null;
         status: string;
         startedAt: string;
       }>(
         `
         insert into runtime_session (
           id, tenant_id, session_no, source_decision_id, user_id,
-          well_id, pump_id, valve_id, status, billing_started_at,
+          well_id, pump_id, valve_id, session_ref, status, billing_started_at,
           started_at, telemetry_snapshot_json
         ) values (
           $1, $2, $3, $4, $5,
-          $6, $7, $8, 'running', now(),
-          now(), $9::jsonb
+          $6, $7, $8, $9, 'running', now(),
+          now(), $10::jsonb
         )
-        returning id, session_no as "sessionNo", status, started_at as "startedAt"
+        returning id, session_no as "sessionNo", session_ref as "sessionRef", status, started_at as "startedAt"
         `,
         [
           sessionId,
@@ -185,6 +187,7 @@ export class RuntimeRepository {
           input.wellId,
           input.pumpId,
           input.valveId,
+          input.sessionRef,
           JSON.stringify(input.telemetrySnapshot)
         ],
         client
@@ -199,6 +202,7 @@ export class RuntimeRepository {
         if (existing) {
           return {
             ...existing,
+            sessionRef: null,
             startedAt: existing.startedAt ?? new Date().toISOString(),
             created: false
           };
@@ -242,6 +246,7 @@ export class RuntimeRepository {
       wellId: string;
       pumpId: string;
       valveId: string;
+      sessionRef: string | null;
       status: string;
       startedAt: string;
       endedAt: string | null;
@@ -250,13 +255,14 @@ export class RuntimeRepository {
       select
         id,
         tenant_id as "tenantId",
-        user_id as "userId",
-        well_id as "wellId",
-        pump_id as "pumpId",
-        valve_id as "valveId",
-        status,
-        started_at as "startedAt",
-        ended_at as "endedAt"
+          user_id as "userId",
+          well_id as "wellId",
+          pump_id as "pumpId",
+          valve_id as "valveId",
+          session_ref as "sessionRef",
+          status,
+          started_at as "startedAt",
+          ended_at as "endedAt"
       from runtime_session
       where id = $1
       ${forUpdate ? 'for update' : ''}
@@ -407,18 +413,236 @@ export class RuntimeRepository {
     return result.rows;
   }
 
+  async findSessionControlTargets(input: { wellId: string; pumpId: string; valveId: string }, client?: PoolClient) {
+    const result = await this.db.query<{
+      wellDeviceId: string | null;
+      wellImei: string | null;
+      wellDeviceCode: string | null;
+      wellDeviceName: string | null;
+      pumpDeviceId: string | null;
+      pumpImei: string | null;
+      pumpDeviceCode: string | null;
+      pumpDeviceName: string | null;
+      valveDeviceId: string | null;
+      valveImei: string | null;
+      valveDeviceCode: string | null;
+      valveDeviceName: string | null;
+    }>(
+      `
+      select
+        wd.id as "wellDeviceId",
+        wd.imei as "wellImei",
+        wd.device_code as "wellDeviceCode",
+        wd.device_name as "wellDeviceName",
+        pd.id as "pumpDeviceId",
+        pd.imei as "pumpImei",
+        pd.device_code as "pumpDeviceCode",
+        pd.device_name as "pumpDeviceName",
+        vd.id as "valveDeviceId",
+        vd.imei as "valveImei",
+        vd.device_code as "valveDeviceCode",
+        vd.device_name as "valveDeviceName"
+      from well w
+      join pump p on p.id = $2
+      join valve v on v.id = $3
+      join device wd on wd.id = w.device_id
+      join device pd on pd.id = p.device_id
+      join device vd on vd.id = v.device_id
+      where w.id = $1
+      limit 1
+      `,
+      [input.wellId, input.pumpId, input.valveId],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
+  async findCommandsBySessionId(sessionId: string, client?: PoolClient) {
+    const result = await this.db.query<{
+      id: string;
+      time: string;
+      session: string | null;
+      target: string;
+      action: string;
+      source: string;
+      result: string;
+      dispatchStatus: string;
+      sentAt: string | null;
+      ackedAt: string | null;
+      requestPayload: Record<string, unknown>;
+      responsePayload: Record<string, unknown>;
+    }>(
+      `
+      select
+        cd.id,
+        to_char(cd.created_at at time zone 'Asia/Shanghai', 'YYYY-MM-DD HH24:MI') as time,
+        rs.session_no as session,
+        coalesce(d.device_name, d.device_code) as target,
+        cd.command_code as action,
+        'runtime_engine' as source,
+        case
+          when cd.dispatch_status in ('success', 'acked') then 'success'
+          when cd.dispatch_status in ('timeout') then 'timeout'
+          else 'error'
+        end as result,
+        cd.dispatch_status as "dispatchStatus",
+        cd.sent_at as "sentAt",
+        cd.acked_at as "ackedAt",
+        cd.request_payload_json as "requestPayload",
+        cd.response_payload_json as "responsePayload"
+      from command_dispatch cd
+      join device d on d.id = cd.target_device_id
+      left join runtime_session rs on rs.id = cd.session_id
+      where cd.session_id = $1
+      order by cd.created_at asc, cd.id asc
+      `,
+      [sessionId],
+      client
+    );
+    return result.rows;
+  }
+
+  async findRuntimeContainers(client?: PoolClient) {
+    const result = await this.db.query<{
+      id: string;
+      name: string;
+      status: string;
+      cpu: string;
+      mem: string;
+      uptime: string;
+    }>(
+      `
+      select
+        rc.id::text as id,
+        coalesce(w.safety_profile_json->>'displayName', w.well_code, rc.id::text) as name,
+        case
+          when rc.status in ('running', 'ready') then 'running'
+          else 'stopped'
+        end as status,
+        concat(coalesce(rc.shared_resource_snapshot_json->>'scenarioCode', 'runtime'), ' / ', rc.active_session_count, ' sessions') as cpu,
+        concat(
+          coalesce(nullif(rc.protection_state_json->>'lock', ''), 'normal'),
+          ' / ',
+          rc.active_session_count,
+          ' active'
+        ) as mem,
+        trim(
+          both ' '
+          from concat(
+            case when latest_session.started_at is not null then 'since ' || to_char(latest_session.started_at at time zone 'Asia/Shanghai', 'MM-DD HH24:MI') end,
+            case when latest_session.ended_at is not null then ' / last stop ' || to_char(latest_session.ended_at at time zone 'Asia/Shanghai', 'MM-DD HH24:MI') end
+          )
+        ) as uptime
+      from runtime_container rc
+      join well w on w.id = rc.well_id
+      left join lateral (
+        select rs.started_at, rs.ended_at
+        from runtime_session rs
+        where rs.runtime_container_id = rc.id
+        order by rs.created_at desc
+        limit 1
+      ) latest_session on true
+      order by rc.updated_at desc, rc.created_at desc
+      `,
+      [],
+      client
+    );
+    return result.rows.map((row) => ({
+      ...row,
+      uptime: row.uptime && row.uptime.length > 0 ? row.uptime : 'no runtime yet'
+    }));
+  }
+
+  async findSessionObservabilityById(sessionId: string, client?: PoolClient) {
+    const result = await this.db.query<{
+      id: string;
+      sessionNo: string;
+      status: string;
+      userId: string;
+      userDisplayName: string | null;
+      wellId: string;
+      wellCode: string | null;
+      wellDisplayName: string | null;
+      runtimeContainerId: string | null;
+      startedAt: string | null;
+      endedAt: string | null;
+      telemetrySnapshot: Record<string, unknown> | null;
+      orderId: string | null;
+      orderNo: string | null;
+      orderStatus: string | null;
+      settlementStatus: string | null;
+      amount: number | null;
+      chargeDurationSec: number | null;
+      chargeVolume: number | null;
+      pricingDetail: Record<string, unknown> | null;
+    }>(
+      `
+      select
+        rs.id,
+        rs.session_no as "sessionNo",
+        rs.status,
+        rs.user_id as "userId",
+        su.display_name as "userDisplayName",
+        rs.well_id as "wellId",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        rs.runtime_container_id as "runtimeContainerId",
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        rs.telemetry_snapshot_json as "telemetrySnapshot",
+        io.id as "orderId",
+        io.order_no as "orderNo",
+        io.status as "orderStatus",
+        io.settlement_status as "settlementStatus",
+        io.amount,
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        io.pricing_detail_json as "pricingDetail"
+      from runtime_session rs
+      join sys_user su on su.id = rs.user_id
+      join well w on w.id = rs.well_id
+      left join irrigation_order io on io.session_id = rs.id
+      where rs.id = $1
+      limit 1
+      `,
+      [sessionId],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
   async findWellIdByIdentifier(identifier: string, client?: PoolClient) {
     const result = await this.db.query<{ id: string }>(
       `
       select id
       from well
-      where id::text = $1 or well_code = $1
+      where id::text = $1
+         or well_code = $1
+         or lower(coalesce(safety_profile_json->>'displayName', '')) = lower($1)
       limit 1
       `,
       [identifier],
       client
     );
     return result.rows[0]?.id ?? null;
+  }
+
+  async findDeviceByIdentifier(identifier: string, client?: PoolClient) {
+    const result = await this.db.query<{ id: string; imei: string | null; deviceCode: string; deviceName: string }>(
+      `
+      select
+        id,
+        imei,
+        device_code as "deviceCode",
+        device_name as "deviceName"
+      from device
+      where id::text = $1 or device_code = $1
+      limit 1
+      `,
+      [identifier],
+      client
+    );
+    return result.rows[0] ?? null;
   }
 
   async stopSession(sessionId: string, client: PoolClient) {
@@ -435,8 +659,8 @@ export class RuntimeRepository {
     }>(
       `
       update runtime_session
-      set status = 'ended', ended_at = now(), end_reason_code = 'manual_stop', updated_at = now()
-      where id = $1 and status in ('pending_start', 'running', 'billing', 'stopping')
+      set status = 'stopping', end_reason_code = 'manual_stop_requested', updated_at = now()
+      where id = $1 and status in ('pending_start', 'running', 'billing')
       returning
         id,
         tenant_id as "tenantId",

@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
-import { IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsNumber, IsOptional, IsString, Matches } from 'class-validator';
+
+const UUID_LIKE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class ListDevicesQueryDto {
   @IsOptional()
@@ -13,15 +15,15 @@ export class ListDevicesQueryDto {
   page_size?: number;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   project_id?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   asset_id?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   device_type_id?: string;
 
   @IsOptional()
@@ -40,7 +42,7 @@ export class CreateLedgerDeviceDto {
   @IsString()
   device_type!: string;
 
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   asset_id!: string;
 
   @IsOptional()
@@ -80,7 +82,7 @@ export class UpdateLedgerDeviceDto {
   device_type?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   asset_id?: string;
 
   @IsOptional()

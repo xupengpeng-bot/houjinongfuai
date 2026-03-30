@@ -48,6 +48,21 @@ export class UpdateWellRuntimePolicyDto {
   concurrencyLimit?: number;
 }
 
+export type WellRuntimePolicyStatus = 'draft' | 'active' | 'inactive';
+
+export interface WellRuntimePolicyReadModel {
+  id: string;
+  wellId: string;
+  billingPackageId: string;
+  powerThresholdKw: number;
+  minRunSeconds: number;
+  maxRunSeconds: number;
+  concurrencyLimit: number;
+  stopProtectionMode: string;
+  safetyRuleJson: Record<string, unknown>;
+  status: WellRuntimePolicyStatus;
+}
+
 export interface EffectivePolicy {
   priorityChain: string[];
   sourceIds: {

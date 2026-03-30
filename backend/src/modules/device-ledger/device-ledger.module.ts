@@ -42,12 +42,12 @@ class DeviceLedgerController {
 
   @Get('display-status/options')
   displayStatusOptions() {
-    return ok({ items: this.service.displayStatusOptions() });
+    return this.service.displayStatusOptions();
   }
 
   @Get('location-source-strategies/options')
   locationSourceStrategyOptions() {
-    return ok({ items: this.service.locationSourceStrategyOptions() });
+    return this.service.locationSourceStrategyOptions();
   }
 
   @Get('spatial-location-contract')
@@ -57,7 +57,7 @@ class DeviceLedgerController {
 
   @Get('comm-identity-types/options')
   commIdentityTypeOptions() {
-    return ok({ items: this.service.commIdentityTypeOptions() });
+    return this.service.commIdentityTypeOptions();
   }
 
   @Get(':id/telemetry')

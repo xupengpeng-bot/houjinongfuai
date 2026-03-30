@@ -1,4 +1,4 @@
-﻿# 系统说明
+# 系统说明
 
 状态：active  
 适用范围：后稷灌溉 AI 运营系统 Phase 1
@@ -11,6 +11,10 @@
 - 本目录不承载 AI 派单文件、CURRENT/RESULT、执行状态或任务回写
 - AI 任务指令在开发体系目录维护：
   - `D:\20251211\zhinengti\development-system\projects\houjinongfuai`
+
+## 附属 Demo（调度/配置雏形）
+
+- [waterflow-control 仓库与本地运行配置](../附属项目-waterflow-control.md)（Git 路径、`npm run dev` 端口 8080、路由 `/` 与 `/workbench` 等固化备忘）
 
 ## 当前正式文档
 

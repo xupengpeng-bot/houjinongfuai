@@ -68,28 +68,36 @@ npm run db:up
 npm run db:migrate
 ```
 
-6. Optional: seed reference data only:
+6. Load national administrative divisions (`region_reference`) from CSV:
 
 ```powershell
 npm run db:seed:reference
 ```
 
+7. **Clean slate — drop all business data, keep only migrations + `region_reference`:**
+
+```powershell
+npm run db:reset:reference-only
+```
+
+Details: `docs/REGION_REFERENCE.md`.
+
 Notes:
 
-- `npm run db:seed` now maps to `db:seed:reference` and is safe by default.
-- Business baseline, demo, and test/UAT data are no longer part of default startup.
+- `npm run db:seed:reference` runs `region-reference:import` only (no duplicate SQL seed for divisions).
+- Business baseline, demo, and test/UAT data are not part of default startup.
 - If you explicitly need them, run one of:
   - `npm run db:seed:baseline`
   - `npm run db:seed:demo`
   - `npm run db:seed:test`
 
-7. Run the app in dev mode:
+8. Run the app in dev mode:
 
 ```powershell
 npm run start:dev
 ```
 
-8. Check health:
+9. Check health:
 
 ```powershell
 Invoke-WebRequest http://127.0.0.1:3000/api/v1/health -UseBasicParsing

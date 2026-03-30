@@ -1,10 +1,12 @@
-import { Controller, Get, Module, Post } from '@nestjs/common';
+import { Body, Controller, Get, HttpCode, HttpStatus, Module, Post } from '@nestjs/common';
 import { ok } from '../../common/http/api-response';
+import { AuthLoginDto } from './auth.dto';
 
 @Controller('auth')
 class AuthController {
   @Post('login')
-  login() {
+  @HttpCode(HttpStatus.OK)
+  login(@Body() _body: AuthLoginDto) {
     return ok({
       token: 'phase1-dev-token',
       accessToken: 'phase1-dev-token',

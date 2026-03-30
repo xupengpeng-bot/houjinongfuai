@@ -1,4 +1,4 @@
-﻿# Lovable <-> Codex Sync
+# Lovable <-> Codex Sync
 
 Status: active  
 Purpose: fixed handoff file for frontend / backend integration questions in Phase 1  
@@ -174,7 +174,7 @@ Typical signals:
 Action:
 
 - no backend code change
-- if frontend work is needed later, create `lovablecomhis/LVB-xxxx-*.md` plus fixtures in the frontend repo
+- if frontend work is needed later, create `docs/codex-dispatch/lovablecomhis/LVB-xxxx-*.md` plus fixtures in the frontend repo (`lovable-working`)
 
 ### B. Minimal backend contract gap, patch allowed
 

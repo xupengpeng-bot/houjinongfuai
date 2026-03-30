@@ -1,5 +1,7 @@
 import { Type } from 'class-transformer';
-import { IsBoolean, IsNumber, IsOptional, IsString, IsUUID } from 'class-validator';
+import { IsBoolean, IsNumber, IsOptional, IsString, Matches } from 'class-validator';
+
+const UUID_LIKE_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 export class ListDeviceRelationsQueryDto {
   @IsOptional()
@@ -14,10 +16,10 @@ export class ListDeviceRelationsQueryDto {
 }
 
 export class CreateDeviceRelationDto {
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   source_device_id!: string;
 
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   target_device_id!: string;
 
   @IsString()
@@ -48,11 +50,11 @@ export class CreateDeviceRelationDto {
 
 export class UpdateDeviceRelationDto {
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   source_device_id?: string;
 
   @IsOptional()
-  @IsUUID()
+  @Matches(UUID_LIKE_PATTERN)
   target_device_id?: string;
 
   @IsOptional()

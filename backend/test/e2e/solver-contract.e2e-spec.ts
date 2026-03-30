@@ -35,7 +35,7 @@ describe('solver contract (published network_model_version required)', () => {
   it('exposes POST ops/solver preview/plan with published graph readModel; explain/simulate unchanged', async () => {
     const preview = await request(app.getHttpServer())
       .post('/api/v1/ops/solver/preview')
-      .send({ network_model_version_id: PUBLISHED_NETWORK_VERSION })
+      .send({ network_model_version_id: PUBLISHED_NETWORK_VERSION, constraints: { objective: 'balanced' } })
       .expect(200);
 
     expect(preview.body.contractVersion).toBe(SOLVER_CONTRACT_VERSION);
@@ -47,17 +47,28 @@ describe('solver contract (published network_model_version required)', () => {
     expect(preview.body.readModel.networkGraphSnapshot.pipeCount).toBeGreaterThanOrEqual(0);
     expect(preview.body.readModel.pumpValveTopology).toBeNull();
     expect(preview.body.result).toMatchObject({ feasible: true });
+    expect(preview.body.result.summary.selected_objective).toBe('balanced');
+    expect(Array.isArray(preview.body.result.explanations)).toBe(true);
+    expect(Array.isArray(preview.body.result.plans)).toBe(true);
 
     const plan = await request(app.getHttpServer())
       .post('/api/v1/ops/solver/plan')
-      .send({ network_model_version_id: PUBLISHED_NETWORK_VERSION })
+      .send({ network_model_version_id: PUBLISHED_NETWORK_VERSION, objective: 'stability_first' })
       .expect(200);
     expect(plan.body.contractVersion).toBe(SOLVER_CONTRACT_VERSION);
     expect(plan.body.readModel.networkGraphSnapshot).toBeDefined();
     expect(plan.body.result).toHaveProperty('steps');
+    expect(plan.body.result.objective).toBe('stability_first');
+    expect(Array.isArray(plan.body.result.candidatePlans)).toBe(true);
+    expect(Array.isArray(plan.body.result.explanations)).toBe(true);
 
-    const explain = await request(app.getHttpServer()).post('/api/v1/ops/solver/explain').send({}).expect(200);
+    const explain = await request(app.getHttpServer())
+      .post('/api/v1/ops/solver/explain')
+      .send({ context: { objective: 'throughput_first' } })
+      .expect(200);
     expect(explain.body.contractVersion).toBe(SOLVER_CONTRACT_VERSION);
+    expect(explain.body.result.objective).toBe('throughput_first');
+    expect(Array.isArray(explain.body.result.available_objectives)).toBe(true);
 
     const simulate = await request(app.getHttpServer()).post('/api/v1/ops/solver/simulate').send({}).expect(200);
     expect(simulate.body.contractVersion).toBe(SOLVER_CONTRACT_VERSION);

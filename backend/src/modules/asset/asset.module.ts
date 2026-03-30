@@ -435,10 +435,9 @@ class AssetService {
       [TENANT_ID, pageSize, offset]
     );
 
-    const items = result.rows.map(({ total_count, ...row }) => ({
-      ...row,
-      location_read_model: buildSpatialLocationReadModelAsset(row)
-    }));
+    // List view: omit per-row location_read_model (same contract as root `spatial_location_contract`).
+    // Detail lives on GET /assets/:id — avoids huge payloads and duplicate contract × N.
+    const items = result.rows.map(({ total_count, ...row }) => row);
     const total = result.rows.length > 0 ? Number(result.rows[0].total_count) : 0;
     return {
       items,
@@ -835,6 +834,22 @@ class AssetService {
       throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while child assets still exist', {
         id,
         reason: 'HAS_CHILD_ASSETS'
+      });
+    }
+
+    const linkedMeteringPoints = await this.db.query<{ count: string }>(
+      `
+      select count(*)::text as count
+      from metering_point
+      where tenant_id = $1 and asset_id = $2
+      `,
+      [TENANT_ID, id]
+    );
+
+    if (Number(linkedMeteringPoints.rows[0]?.count ?? 0) > 0) {
+      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while metering points still reference it', {
+        id,
+        reason: 'HAS_METERING_POINTS'
       });
     }
 

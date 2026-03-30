@@ -28,6 +28,8 @@ import { MeteringPointModule } from './modules/metering-point/metering-point.mod
 import { DeviceRelationsModule } from './modules/device-relations/device-relations.module';
 import { DispatchMysqlModule } from './modules/dispatch-mysql/dispatch-mysql.module';
 import { SolverModule } from './modules/solver/solver.module';
+import { NetworkWorkbenchModule } from './modules/network-workbench/network-workbench.module';
+import { FarmerFundModule } from './modules/farmer-fund/farmer-fund.module';
 
 @Module({
   imports: [
@@ -59,6 +61,8 @@ import { SolverModule } from './modules/solver/solver.module';
     DeviceRelationsModule,
     DispatchMysqlModule,
     SolverModule,
+    NetworkWorkbenchModule,
+    FarmerFundModule,
     AlarmModule,
     WorkOrderModule,
     UatModule,

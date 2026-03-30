@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
-  HttpException,
+  HttpCode,
   HttpStatus,
+  HttpException,
   Injectable,
   Module,
   Param,
@@ -18,6 +20,7 @@ import {
   toProjectBlockCompat
 } from '../../common/contracts/lvb4021-compat';
 import { DatabaseService } from '../../common/db/database.service';
+import { CreateProjectBlockDto, UpdateProjectBlockDto } from './project-block.dto';
 
 export type { ProjectBlockRow };
 
@@ -40,32 +43,6 @@ function parsePageSize(value?: string, fallback = 20) {
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === 'object' && !Array.isArray(value);
-}
-
-interface CreateProjectBlockDto {
-  block_name?: string;
-  project_id?: string;
-  center_latitude?: number | null;
-  center_longitude?: number | null;
-  /** Canonical (DB / internal). */
-  area_size?: number | null;
-  /** LVB-4021 frontend alias; persisted as `area_size`. */
-  area_hectare?: number | null;
-  priority?: number;
-  status?: string;
-  remarks?: string;
-}
-
-interface UpdateProjectBlockDto {
-  block_name?: string;
-  project_id?: string;
-  center_latitude?: number | null;
-  center_longitude?: number | null;
-  area_size?: number | null;
-  area_hectare?: number | null;
-  priority?: number;
-  status?: string;
-  remarks?: string;
 }
 
 @Injectable()
@@ -305,6 +282,34 @@ class ProjectBlockService {
 
     return this.getById(id);
   }
+
+  async delete(id: string) {
+    await this.getById(id);
+
+    const linkedMeteringPoints = await this.db.query<{ count: string }>(
+      `
+      select count(*)::text as count
+      from metering_point
+      where tenant_id = $1 and block_id = $2
+      `,
+      [TENANT_ID, id]
+    );
+
+    if (Number(linkedMeteringPoints.rows[0]?.count ?? 0) > 0) {
+      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Project block cannot be deleted while metering points still reference it', {
+        id,
+        reason: 'HAS_METERING_POINTS'
+      });
+    }
+
+    await this.db.query(
+      `
+      delete from project_block
+      where tenant_id = $1 and id = $2
+      `,
+      [TENANT_ID, id]
+    );
+  }
 }
 
 @Controller('project-blocks')
@@ -334,6 +339,12 @@ class ProjectBlockController {
   @Put(':id')
   update(@Param('id') id: string, @Body() dto: UpdateProjectBlockDto) {
     return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async delete(@Param('id') id: string) {
+    await this.service.delete(id);
   }
 }
 

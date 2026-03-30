@@ -85,6 +85,8 @@ class RegionLibraryService {
     if (params.enabled != null) {
       values.push(params.enabled);
       where.push(`rr.enabled = $${values.length}`);
+    } else {
+      where.push('rr.enabled = true');
     }
 
     values.push(pageSize, offset);
@@ -130,10 +132,10 @@ class RegionLibraryService {
 
   async children(parentCode?: string) {
     const values: unknown[] = [];
-    let whereClause = 'where rr.parent_code is null';
+    let whereClause = 'where rr.parent_code is null and rr.enabled = true';
     if (parentCode?.trim()) {
       values.push(parentCode.trim());
-      whereClause = `where rr.parent_code = $1`;
+      whereClause = `where rr.parent_code = $1 and rr.enabled = true`;
     }
 
     const result = await this.db.query<RegionReferenceRow>(

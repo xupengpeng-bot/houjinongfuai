@@ -10,9 +10,8 @@ $seedDir = Join-Path $PSScriptRoot "..\\sql\\seed"
 $service = "postgres"
 
 $seedGroups = @{
-  reference = @(
-    '001a_region_reference.sql'
-  )
+  # 区划数据仅通过 npm run region-reference:import 加载；此处保留空组以便脚本兼容
+  reference = @()
   baseline = @(
     '001_reference.sql'
   )
@@ -57,6 +56,11 @@ $files = foreach ($fileName in $seedFileNames) {
     throw "Seed file not found: $fileName"
   }
   Get-Item $fullPath
+}
+
+if ($seedFileNames.Count -eq 0) {
+  Write-Host "Seed group '$Group' has no SQL files to apply (skipped)." -ForegroundColor Yellow
+  exit 0
 }
 
 Write-Host "Applying seed group '$Group'..." -ForegroundColor Cyan

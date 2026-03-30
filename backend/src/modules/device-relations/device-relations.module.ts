@@ -14,22 +14,22 @@ class DeviceRelationsController {
 
   @Get('relation-types/options')
   relationTypeOptions() {
-    return ok({ items: this.service.relationTypeOptions() });
+    return this.service.relationTypeOptions();
   }
 
   @Get('sequence-rules/options')
   sequenceRuleOptions() {
-    return ok({ items: this.service.sequenceRuleOptions() });
+    return this.service.sequenceRuleOptions();
   }
 
   @Get('source-devices/options')
   async sourceDeviceOptions() {
-    return ok({ items: await this.service.sourceDeviceOptions() });
+    return this.service.sourceDeviceOptions();
   }
 
   @Get('target-devices/options')
   async targetDeviceOptions() {
-    return ok({ items: await this.service.targetDeviceOptions() });
+    return this.service.targetDeviceOptions();
   }
 
   @Get()

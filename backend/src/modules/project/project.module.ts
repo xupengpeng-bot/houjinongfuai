@@ -455,6 +455,22 @@ class ProjectService {
   async delete(id: string) {
     await this.getById(id);
 
+    const linkedBlocks = await this.db.query<{ count: string }>(
+      `
+      select count(*)::text as count
+      from project_block
+      where tenant_id = $1 and project_id = $2
+      `,
+      [TENANT_ID, id]
+    );
+
+    if (Number(linkedBlocks.rows[0]?.count ?? 0) > 0) {
+      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Project cannot be deleted while blocks still exist', {
+        id,
+        reason: 'HAS_BLOCKS'
+      });
+    }
+
     const linkedAssets = await this.db.query<{ count: string }>(
       `
       select count(*)::text as count
@@ -467,7 +483,23 @@ class ProjectService {
     if (Number(linkedAssets.rows[0]?.count ?? 0) > 0) {
       throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Project cannot be deleted while assets still exist', {
         id,
-        reason: 'HAS_ASSETS'
+      reason: 'HAS_ASSETS'
+      });
+    }
+
+    const linkedMeteringPoints = await this.db.query<{ count: string }>(
+      `
+      select count(*)::text as count
+      from metering_point
+      where tenant_id = $1 and project_id = $2
+      `,
+      [TENANT_ID, id]
+    );
+
+    if (Number(linkedMeteringPoints.rows[0]?.count ?? 0) > 0) {
+      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Project cannot be deleted while metering points still exist', {
+        id,
+        reason: 'HAS_METERING_POINTS'
       });
     }
 

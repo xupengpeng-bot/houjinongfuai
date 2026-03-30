@@ -40,6 +40,7 @@ class SolverController {
 @Module({
   imports: [NetworkModelModule],
   controllers: [SolverController],
-  providers: [SolverService]
+  providers: [SolverService],
+  exports: [SolverService]
 })
 export class SolverModule {}

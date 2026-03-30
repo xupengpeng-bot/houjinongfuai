@@ -1,4 +1,4 @@
-﻿# Project Docs Map
+# Project Docs Map
 
 Status: active
 Audience: PM, Codex, Lovable, embedded, hardware, QA
@@ -47,6 +47,10 @@ Read there when you need:
   - Current domain freeze, compatibility mapping, contract checklist, UAT plan, and active Codex/Lovable sync.
 - `docs/lovable`
   - Active frontend integration notes only.
+- `docs/codex-dispatch/`
+  - 嵌入式 / 硬件 / 前端协作派单目录（`embeddedcomhis`、`hardwarecomhis`、`lovablecomhis`），已从仓库根迁入，见 `docs/codex-dispatch/README.md`。
+- `docs/附属项目-waterflow-control.md`
+  - 灌溉调度/管网配置前端 Demo（`waterflow-control`）的 **Git 地址、推荐克隆路径、端口与依赖摘要**；与主工程并列时建议放在 `houjinongfuAI-Cursor\waterflow-control`。
 - `docs/devtools`
   - bridge only; shared development-system rules now live in `D:\20251211\zhinengti\development-system\shared`.
 - `docs/governance`

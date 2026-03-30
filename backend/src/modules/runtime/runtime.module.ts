@@ -1,6 +1,8 @@
-import { Body, Controller, Get, HttpCode, Module, Param, Post } from '@nestjs/common';
+import { Body, Controller, Get, Headers, HttpCode, Module, Param, Post } from '@nestjs/common';
 import { AppException } from '../../common/errors/app-exception';
 import { business, ok } from '../../common/http/api-response';
+import { DeviceGatewayModule } from '../device-gateway/device-gateway.module';
+import { FarmerFundModule } from '../farmer-fund/farmer-fund.module';
 import { OrderModule } from '../order/order.module';
 import { PolicyModule } from '../policy/policy.module';
 import { TopologyModule } from '../topology/topology.module';
@@ -41,8 +43,8 @@ class RuntimeController {
 
   @Post('farmer/wells/:id/start-check')
   @HttpCode(200)
-  async startCheckByWell(@Param('id') id: string) {
-    return this.execute(() => this.runtimeService.createStartDecisionForWellIdentifier(id));
+  async startCheckByWell(@Param('id') id: string, @Headers('x-farmer-card-token') card?: string) {
+    return this.execute(() => this.runtimeService.createStartDecisionForWellIdentifier(id, card?.trim() || null));
   }
 
   @Post('u/runtime/sessions')
@@ -53,14 +55,14 @@ class RuntimeController {
 
   @Post('farmer/wells/:id/sessions')
   @HttpCode(200)
-  async createRuntimeSessionByWell(@Param('id') id: string) {
-    return this.execute(() => this.runtimeService.createSessionFromWellIdentifier(id));
+  async createRuntimeSessionByWell(@Param('id') id: string, @Headers('x-farmer-card-token') card?: string) {
+    return this.execute(() => this.runtimeService.createSessionFromWellIdentifier(id, card?.trim() || null));
   }
 
   @Get('farmer/session/active')
   @HttpCode(200)
-  async currentSession() {
-    return this.execute(() => this.runtimeService.getCurrentSession());
+  async currentSession(@Headers('x-farmer-card-token') card?: string) {
+    return this.execute(() => this.runtimeService.getCurrentSession(card?.trim() || null));
   }
 
   @Get('run-sessions')
@@ -103,6 +105,18 @@ class RuntimeController {
     return this.execute(() => this.runtimeService.listRuntimeContainers());
   }
 
+  @Get('run-sessions/:id/observability')
+  @HttpCode(200)
+  async sessionObservability(@Param('id') id: string) {
+    return this.execute(() => this.runtimeService.getSessionObservability(id));
+  }
+
+  @Post('runtime/test-command')
+  @HttpCode(200)
+  async sendTestCommand(@Body() dto: { device_id: string; action: string }) {
+    return this.execute(() => this.runtimeService.sendTestCommand(dto.device_id, dto.action));
+  }
+
   @Post('u/runtime/sessions/:id/stop')
   @HttpCode(200)
   async stop(@Param('id') id: string) {
@@ -111,13 +125,13 @@ class RuntimeController {
 
   @Post('farmer/sessions/:id/stop')
   @HttpCode(200)
-  async stopFromFarmer(@Param('id') id: string) {
-    return this.execute(() => this.runtimeService.stopSession(id));
+  async stopFromFarmer(@Param('id') id: string, @Headers('x-farmer-card-token') card?: string) {
+    return this.execute(() => this.runtimeService.stopSession(id, card?.trim() || null));
   }
 }
 
 @Module({
-  imports: [PolicyModule, TopologyModule, OrderModule],
+  imports: [PolicyModule, TopologyModule, OrderModule, DeviceGatewayModule, FarmerFundModule],
   controllers: [RuntimeController],
   providers: [RuntimeRepository, SessionStatusLogRepository, RuntimeDecisionService, RuntimeService],
   exports: [RuntimeDecisionService]

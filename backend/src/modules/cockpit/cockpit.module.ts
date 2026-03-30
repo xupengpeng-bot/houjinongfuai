@@ -1,4 +1,4 @@
-import { Controller, Get, Module, Query } from '@nestjs/common';
+import { Body, Controller, Get, Module, Put, Query } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
 
@@ -70,6 +70,12 @@ export interface AlertCenterRecentRow {
   device_id: string | null;
   session_id: string | null;
   created_at: string;
+  device_name: string;
+  project_name: string | null;
+  block_name: string | null;
+  description: string;
+  work_order_id: string | null;
+  work_order_status: string | null;
 }
 
 export interface AlertCenterDto {
@@ -132,6 +138,27 @@ export interface AutoSchedulingDto {
   recent_insights: AutoSchedulingInsightRow[];
 }
 
+export interface SchedulingParamsDto {
+  auto_dispatch_enabled: boolean;
+  dispatch_window_start: string;
+  dispatch_window_end: string;
+  max_parallel_sessions: number;
+  alert_auto_pause_enabled: boolean;
+  high_severity_pause_threshold: number;
+  dispatch_retry_limit: number;
+  updated_at: string | null;
+}
+
+export interface AlertRulesDto {
+  auto_create_work_order: boolean;
+  default_work_order_priority: string;
+  notify_operator_enabled: boolean;
+  notify_manager_enabled: boolean;
+  high_pressure_enabled: boolean;
+  comm_loss_enabled: boolean;
+  updated_at: string | null;
+}
+
 /** COD-2026-03-27-013: cost & finance cockpit aggregate */
 export interface CostFinanceProjectBlockRow {
   project_id: string;
@@ -164,6 +191,78 @@ export interface CostFinanceDto {
 @Controller('ops')
 class CockpitOpsController {
   constructor(private readonly db: DatabaseService) {}
+
+  private readonly demoTenantId = '00000000-0000-0000-0000-000000000001';
+
+  private normalizeSchedulingParams(promptJson: unknown, updatedAt: Date | string | null): SchedulingParamsDto {
+    const prompt = promptJson && typeof promptJson === 'object' ? (promptJson as Record<string, unknown>) : {};
+    const runtimeDefaults =
+      prompt.runtimeDefaults && typeof prompt.runtimeDefaults === 'object'
+        ? (prompt.runtimeDefaults as Record<string, unknown>)
+        : {};
+    const alertRules =
+      prompt.alertRules && typeof prompt.alertRules === 'object'
+        ? (prompt.alertRules as Record<string, unknown>)
+        : {};
+
+    const toBoolean = (value: unknown, fallback: boolean) =>
+      typeof value === 'boolean' ? value : fallback;
+    const toNumber = (value: unknown, fallback: number) => {
+      const num = Number(value);
+      return Number.isFinite(num) ? num : fallback;
+    };
+    const toTime = (value: unknown, fallback: string) =>
+      typeof value === 'string' && /^\d{2}:\d{2}$/.test(value) ? value : fallback;
+
+    return {
+      auto_dispatch_enabled: toBoolean(prompt.autoDispatchEnabled, true),
+      dispatch_window_start: toTime(prompt.dispatchWindowStart, '05:00'),
+      dispatch_window_end: toTime(prompt.dispatchWindowEnd, '21:00'),
+      max_parallel_sessions: toNumber(runtimeDefaults.concurrencyLimit, 4),
+      alert_auto_pause_enabled: toBoolean(alertRules.autoPauseEnabled, true),
+      high_severity_pause_threshold: toNumber(alertRules.highSeverityPauseThreshold, 2),
+      dispatch_retry_limit: toNumber(prompt.dispatchRetryLimit, 2),
+      updated_at:
+        updatedAt instanceof Date
+          ? updatedAt.toISOString()
+          : typeof updatedAt === 'string'
+            ? new Date(updatedAt).toISOString()
+            : null
+    };
+  }
+
+  private normalizeAlertRules(promptJson: unknown, updatedAt: Date | string | null): AlertRulesDto {
+    const prompt = promptJson && typeof promptJson === 'object' ? (promptJson as Record<string, unknown>) : {};
+    const notifyRules =
+      prompt.notifyRules && typeof prompt.notifyRules === 'object'
+        ? (prompt.notifyRules as Record<string, unknown>)
+        : {};
+    const alarmTypes =
+      prompt.alarmTypes && typeof prompt.alarmTypes === 'object'
+        ? (prompt.alarmTypes as Record<string, unknown>)
+        : {};
+
+    const toBoolean = (value: unknown, fallback: boolean) =>
+      typeof value === 'boolean' ? value : fallback;
+
+    return {
+      auto_create_work_order: toBoolean(prompt.autoCreateWorkOrder, true),
+      default_work_order_priority:
+        typeof prompt.defaultWorkOrderPriority === 'string' && prompt.defaultWorkOrderPriority.trim() !== ''
+          ? prompt.defaultWorkOrderPriority
+          : 'high',
+      notify_operator_enabled: toBoolean(notifyRules.operatorEnabled, true),
+      notify_manager_enabled: toBoolean(notifyRules.managerEnabled, true),
+      high_pressure_enabled: toBoolean(alarmTypes.highPressureEnabled, true),
+      comm_loss_enabled: toBoolean(alarmTypes.commLossEnabled, true),
+      updated_at:
+        updatedAt instanceof Date
+          ? updatedAt.toISOString()
+          : typeof updatedAt === 'string'
+            ? new Date(updatedAt).toISOString()
+            : null
+    };
+  }
 
   @Get('project-overview')
   async projectOverview(): Promise<ReturnType<typeof ok<ProjectOverviewDto>>> {
@@ -438,10 +537,46 @@ class CockpitOpsController {
       device_id: string | null;
       session_id: string | null;
       created_at: Date;
+      device_name: string | null;
+      project_name: string | null;
+      block_name: string | null;
+      description: string | null;
+      work_order_id: string | null;
+      work_order_status: string | null;
     }>(
       `
-      select id, alarm_code, severity, status, device_id, session_id, created_at
-      from alarm_event
+      select
+        ae.id,
+        ae.alarm_code,
+        ae.severity,
+        ae.status,
+        ae.device_id,
+        ae.session_id,
+        ae.created_at,
+        coalesce(d.device_name, ae.alarm_code) as device_name,
+        p.project_name,
+        pb.block_name,
+        coalesce(ae.trigger_reason_json->>'message', ae.alarm_code) as description,
+        wo.id as work_order_id,
+        wo.status as work_order_status
+      from alarm_event ae
+      left join device d on d.id = ae.device_id
+      left join runtime_session rs on rs.id = ae.session_id
+      left join well w on w.id = coalesce(
+        rs.well_id,
+        (select v.well_id from valve v where v.device_id = ae.device_id limit 1),
+        (select pump.well_id from pump where pump.device_id = ae.device_id limit 1),
+        (select own_well.id from well own_well where own_well.device_id = ae.device_id limit 1)
+      )
+      left join project_block pb on pb.id = w.block_id
+      left join project p on p.id = pb.project_id
+      left join lateral (
+        select id, status
+        from work_order
+        where source_alarm_id = ae.id
+        order by created_at desc
+        limit 1
+      ) wo on true
       order by created_at desc
       limit 20
       `
@@ -465,7 +600,13 @@ class CockpitOpsController {
         status: r.status,
         device_id: r.device_id,
         session_id: r.session_id,
-        created_at: r.created_at.toISOString()
+        created_at: r.created_at.toISOString(),
+        device_name: r.device_name ?? r.alarm_code,
+        project_name: r.project_name,
+        block_name: r.block_name,
+        description: r.description ?? r.alarm_code,
+        work_order_id: r.work_order_id,
+        work_order_status: r.work_order_status
       }))
     });
   }
@@ -703,6 +844,197 @@ class CockpitOpsController {
       })),
       recent_insights: insights.slice(0, 10)
     });
+  }
+
+  @Get('scheduling-params')
+  async schedulingParams(): Promise<ReturnType<typeof ok<SchedulingParamsDto>>> {
+    const result = await this.db.query<{
+      prompt_json: unknown;
+      updated_at: Date | string | null;
+    }>(
+      `
+      select prompt_json, updated_at
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'auto_scheduling'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    const row = result.rows[0];
+    return ok(this.normalizeSchedulingParams(row?.prompt_json ?? {}, row?.updated_at ?? null));
+  }
+
+  @Put('scheduling-params')
+  async updateSchedulingParams(
+    @Body() payload: SchedulingParamsDto
+  ): Promise<ReturnType<typeof ok<SchedulingParamsDto>>> {
+    const promptJson = {
+      autoDispatchEnabled: payload.auto_dispatch_enabled,
+      dispatchWindowStart: payload.dispatch_window_start,
+      dispatchWindowEnd: payload.dispatch_window_end,
+      dispatchRetryLimit: payload.dispatch_retry_limit,
+      runtimeDefaults: {
+        concurrencyLimit: payload.max_parallel_sessions
+      },
+      alertRules: {
+        autoPauseEnabled: payload.alert_auto_pause_enabled,
+        highSeverityPauseThreshold: payload.high_severity_pause_threshold
+      }
+    };
+
+    const existing = await this.db.query<{ id: string }>(
+      `
+      select id
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'auto_scheduling'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    if (existing.rows[0]) {
+      await this.db.query(
+        `
+        update interaction_policy
+        set confirm_mode = 'single_confirm',
+            prompt_json = $2::jsonb,
+            status = 'active',
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [existing.rows[0].id, JSON.stringify(promptJson)]
+      );
+    } else {
+      await this.db.query(
+        `
+        insert into interaction_policy (
+          tenant_id, target_type, scene_code, confirm_mode, prompt_json, status, created_at, updated_at
+        )
+        values ($1, 'system', 'auto_scheduling', 'single_confirm', $2::jsonb, 'active', now(), now())
+        `,
+        [this.demoTenantId, JSON.stringify(promptJson)]
+      );
+    }
+
+    const latest = await this.db.query<{
+      prompt_json: unknown;
+      updated_at: Date | string | null;
+    }>(
+      `
+      select prompt_json, updated_at
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'auto_scheduling'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    const row = latest.rows[0];
+    return ok(this.normalizeSchedulingParams(row?.prompt_json ?? {}, row?.updated_at ?? null));
+  }
+
+  @Get('alert-rules')
+  async alertRules(): Promise<ReturnType<typeof ok<AlertRulesDto>>> {
+    const result = await this.db.query<{
+      prompt_json: unknown;
+      updated_at: Date | string | null;
+    }>(
+      `
+      select prompt_json, updated_at
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'alert_rules'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    const row = result.rows[0];
+    return ok(this.normalizeAlertRules(row?.prompt_json ?? {}, row?.updated_at ?? null));
+  }
+
+  @Put('alert-rules')
+  async updateAlertRules(@Body() payload: AlertRulesDto): Promise<ReturnType<typeof ok<AlertRulesDto>>> {
+    const promptJson = {
+      autoCreateWorkOrder: payload.auto_create_work_order,
+      defaultWorkOrderPriority: payload.default_work_order_priority,
+      notifyRules: {
+        operatorEnabled: payload.notify_operator_enabled,
+        managerEnabled: payload.notify_manager_enabled
+      },
+      alarmTypes: {
+        highPressureEnabled: payload.high_pressure_enabled,
+        commLossEnabled: payload.comm_loss_enabled
+      }
+    };
+
+    const existing = await this.db.query<{ id: string }>(
+      `
+      select id
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'alert_rules'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    if (existing.rows[0]) {
+      await this.db.query(
+        `
+        update interaction_policy
+        set confirm_mode = 'single_confirm',
+            prompt_json = $2::jsonb,
+            status = 'active',
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [existing.rows[0].id, JSON.stringify(promptJson)]
+      );
+    } else {
+      await this.db.query(
+        `
+        insert into interaction_policy (
+          tenant_id, target_type, scene_code, confirm_mode, prompt_json, status, created_at, updated_at
+        )
+        values ($1, 'system', 'alert_rules', 'single_confirm', $2::jsonb, 'active', now(), now())
+        `,
+        [this.demoTenantId, JSON.stringify(promptJson)]
+      );
+    }
+
+    const latest = await this.db.query<{
+      prompt_json: unknown;
+      updated_at: Date | string | null;
+    }>(
+      `
+      select prompt_json, updated_at
+      from interaction_policy
+      where tenant_id = $1
+        and target_type = 'system'
+        and scene_code = 'alert_rules'
+      order by updated_at desc
+      limit 1
+      `,
+      [this.demoTenantId]
+    );
+
+    const row = latest.rows[0];
+    return ok(this.normalizeAlertRules(row?.prompt_json ?? {}, row?.updated_at ?? null));
   }
 
   /** COD-2026-03-27-013: billing usage + block cost shell */

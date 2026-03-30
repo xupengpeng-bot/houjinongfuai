@@ -1,11 +1,16 @@
-import { Controller, Get, Module, Param, Post } from '@nestjs/common';
+import { Controller, Get, Headers, Module, Param, Post, Query } from '@nestjs/common';
 import { ok } from '../../common/http/api-response';
+import { FarmerFundModule } from '../farmer-fund/farmer-fund.module';
+import { FarmerFundService } from '../farmer-fund/farmer-fund.service';
 import { OrderRepository } from './order.repository';
 import { OrderService } from './order.service';
 
 @Controller()
 class OrderController {
-  constructor(private readonly orderService: OrderService) {}
+  constructor(
+    private readonly orderService: OrderService,
+    private readonly farmerFundService: FarmerFundService
+  ) {}
 
   private mapOrderForPage(order: {
     id: string;
@@ -70,17 +75,39 @@ class OrderController {
   }
 
   @Get('u/orders')
-  async userOrders() {
-    return ok({ items: (await this.orderService.listUserOrders('00000000-0000-0000-0000-000000000101')).map((item) => this.mapOrderForPage(item)) });
+  async userOrders(
+    @Headers('x-farmer-card-token') card?: string,
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string
+  ) {
+    return this.farmerOrderPage(card, pageRaw, pageSizeRaw);
   }
 
   @Get('farmer/orders')
-  async farmerOrders() {
-    return ok({ items: (await this.orderService.listUserOrders('00000000-0000-0000-0000-000000000101')).map((item) => this.mapOrderForPage(item)) });
+  async farmerOrders(
+    @Headers('x-farmer-card-token') card?: string,
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string
+  ) {
+    return this.farmerOrderPage(card, pageRaw, pageSizeRaw);
+  }
+
+  private async farmerOrderPage(card?: string, pageRaw?: string, pageSizeRaw?: string) {
+    const page = Math.max(1, Number.parseInt(pageRaw ?? '1', 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeRaw ?? '20', 10) || 20));
+    const user = await this.farmerFundService.resolvePortalUser(card?.trim() || null);
+    const { rows, total } = await this.orderService.listUserOrdersPage(user.id, page, pageSize);
+    return ok({
+      items: rows.map((item) => this.mapOrderForPage(item)),
+      total,
+      page,
+      page_size: pageSize
+    });
   }
 }
 
 @Module({
+  imports: [FarmerFundModule],
   controllers: [OrderController],
   providers: [OrderRepository, OrderService],
   exports: [OrderRepository]

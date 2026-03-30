@@ -5,8 +5,8 @@ Audience: PM and 硬件工程师
 
 ## Official live entry
 
-- `hardwarecomhis/CURRENT.md`
-- `hardwarecomhis/RESULT.md`
+- `docs/codex-dispatch/hardwarecomhis/CURRENT.md`
+- `docs/codex-dispatch/hardwarecomhis/RESULT.md`
 
 When PM or the user says only "execute", 硬件工程师 must read `CURRENT.md` first and write back to `RESULT.md`.
 
@@ -18,7 +18,7 @@ When PM or the user says only "execute", 硬件工程师 must read `CURRENT.md` 
 
 ## Reading order
 
-1. read `hardwarecomhis/CURRENT.md`
+1. read `docs/codex-dispatch/hardwarecomhis/CURRENT.md`
 2. read the linked task file
 3. read the matching context file
 4. read the matching fixtures

@@ -11,11 +11,11 @@ Paused note:
 
 ## Read first
 
-1. `embeddedcomhis/README.md`
+1. `docs/codex-dispatch/embeddedcomhis/README.md`
 2. `docs/governance/delivery-workflow.md`
-3. `embeddedcomhis/EMB-0001-tcp-json-v1固件接入基线.md`
-4. `embeddedcomhis/context/EMB-0001-context.md`
-5. `embeddedcomhis/fixtures/EMB-0001/*`
+3. `docs/codex-dispatch/embeddedcomhis/EMB-0001-tcp-json-v1固件接入基线.md`
+4. `docs/codex-dispatch/embeddedcomhis/context/EMB-0001-context.md`
+5. `docs/codex-dispatch/embeddedcomhis/fixtures/EMB-0001/*`
 
 ## Execute now
 
@@ -35,7 +35,7 @@ Deliver at least:
 ## Git rules
 
 - If there is a dedicated firmware repo, commit there and return the commit SHA.
-- If there is no firmware repo available in the current environment, place the result files under `embeddedcomhis/` and commit those documentation artifacts in this repo.
+- If there is no firmware repo available in the current environment, place the result files under `docs/codex-dispatch/embeddedcomhis/` and commit those documentation artifacts in this repo.
 - Do not fabricate a firmware SHA if no firmware repo was actually used.
 - Do not commit `.env`, local tool caches, or unrelated generated files.
 

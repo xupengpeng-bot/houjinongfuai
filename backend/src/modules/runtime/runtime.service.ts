@@ -10,9 +10,11 @@ import {
 } from '../../common/contracts/runtime-decision';
 import { AppException } from '../../common/errors/app-exception';
 import { ErrorCodes } from '../../common/errors/error-codes';
+import { DeviceGatewayService } from '../device-gateway/device-gateway.service';
 import { OrderRepository } from '../order/order.repository';
 import { EffectivePolicyResolver, FIXED_PRIORITY_CHAIN } from '../policy/effective-policy.resolver';
 import { TopologyService } from '../topology/topology.service';
+import { FarmerFundRepository } from '../farmer-fund/farmer-fund.repository';
 import { RuntimeRepository } from './runtime.repository';
 import { SessionStatusLogRepository } from './session-status-log.repository';
 
@@ -21,18 +23,25 @@ export class RuntimeDecisionService {
   constructor(
     private readonly topologyService: TopologyService,
     private readonly effectivePolicyResolver: EffectivePolicyResolver,
-    private readonly runtimeRepository: RuntimeRepository
+    private readonly runtimeRepository: RuntimeRepository,
+    private readonly farmerFundRepository: FarmerFundRepository
   ) {}
 
-  async createStartDecision(input: { targetType: 'valve' | 'well' | 'session'; targetId: string; sceneCode?: string }): Promise<RuntimeDecisionContract> {
-    const runtimeUser = await this.getRuntimeUser();
+  async createStartDecision(
+    input: { targetType: 'valve' | 'well' | 'session'; targetId: string; sceneCode?: string },
+    options?: { cardToken?: string | null }
+  ): Promise<RuntimeDecisionContract> {
+    const runtimeUser = await this.getRuntimeUser(options?.cardToken);
     const evaluated = await this.evaluateStartEligibility(
       {
         targetType: input.targetType,
         targetId: input.targetId,
         sceneCode: input.sceneCode ?? 'farmer_scan_start'
       },
-      runtimeUser.id
+      runtimeUser.id,
+      runtimeUser.tenantId,
+      options?.cardToken,
+      undefined
     );
 
     const decisionId = await this.runtimeRepository.createDecision({
@@ -62,9 +71,21 @@ export class RuntimeDecisionService {
     };
   }
 
+  private estimateMinChargeAmount(mode: string, unitPrice: number, minChargeAmount: number) {
+    if (mode === 'flat') {
+      return Math.max(minChargeAmount, unitPrice);
+    }
+    if (mode === 'free') {
+      return 0;
+    }
+    return Math.max(minChargeAmount, unitPrice > 0 ? unitPrice : minChargeAmount);
+  }
+
   async evaluateStartEligibility(
     input: { targetType: 'valve' | 'well' | 'session'; targetId: string; sceneCode: string },
     runtimeUserId: string,
+    tenantId: string,
+    cardToken?: string | null,
     client?: PoolClient
   ) {
     const topology = await this.topologyService.validateStartTarget(input.targetType, input.targetId);
@@ -130,6 +151,25 @@ export class RuntimeDecisionService {
           );
         }
 
+        if (cardToken?.trim() && blockingReasons.length === 0) {
+          const minAmt = this.estimateMinChargeAmount(
+            String(policy.billing.billingMode ?? 'duration'),
+            Number(policy.billing.unitPrice ?? 0),
+            Number(policy.billing.minChargeAmount ?? 0)
+          );
+          const bal = await this.farmerFundRepository.getBalance(tenantId, runtimeUserId, client);
+          if (bal < minAmt) {
+            blockingReasons.push(
+              createBlockingReason(
+                ErrorCodes.WALLET_INSUFFICIENT_BALANCE,
+                `insufficient prepaid balance (need at least ${minAmt}, current ${bal})`,
+                'wallet',
+                { balance: bal, required: minAmt }
+              )
+            );
+          }
+        }
+
         effectiveRuleSnapshot = {
           ...policy,
           relation: topology.relation
@@ -184,7 +224,16 @@ export class RuntimeDecisionService {
     );
   }
 
-  async getRuntimeUser() {
+  async getRuntimeUser(cardToken?: string | null) {
+    if (cardToken?.trim()) {
+      const row = await this.farmerFundRepository.findActiveCardUser(cardToken.trim());
+      if (!row) {
+        throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Card not found or inactive', 404, {
+          cardToken: cardToken.trim()
+        });
+      }
+      return row;
+    }
     const runtimeUser = await this.runtimeRepository.findDefaultRuntimeUser();
     if (!runtimeUser) {
       throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'No default runtime user found for local validation');
@@ -199,11 +248,249 @@ export class RuntimeService {
     private readonly runtimeDecisionService: RuntimeDecisionService,
     private readonly runtimeRepository: RuntimeRepository,
     private readonly orderRepository: OrderRepository,
-    private readonly sessionStatusLogRepository: SessionStatusLogRepository
+    private readonly sessionStatusLogRepository: SessionStatusLogRepository,
+    private readonly deviceGatewayService: DeviceGatewayService
   ) {}
 
-  async createSession(decisionId: string) {
-    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser();
+  private resolveStartSequence(relationConfigJson: Record<string, unknown>) {
+    const sequence = String(relationConfigJson.sequence ?? 'valve_first').toLowerCase();
+    if (sequence === 'simultaneous' || sequence === 'pump_first') return sequence;
+    return 'valve_first';
+  }
+
+  private async queueSessionStartCommands(input: {
+    sessionId: string;
+    sessionRef: string | null;
+    orderId: string;
+    relation: Record<string, any>;
+    client: PoolClient;
+  }) {
+    const targets = await this.runtimeRepository.findSessionControlTargets(
+      {
+        wellId: input.relation.wellId,
+        pumpId: input.relation.pumpId,
+        valveId: input.relation.valveId
+      },
+      input.client
+    );
+
+    if (!targets) {
+      return {
+        startToken: null,
+        sequence: 'valve_first',
+        queued_commands: []
+      };
+    }
+
+    const sequence = this.resolveStartSequence((input.relation.relationConfigJson ?? {}) as Record<string, unknown>);
+    const startToken = `start-${input.sessionId.slice(0, 8)}`;
+    const pumpDelaySeconds = Number(input.relation.relationConfigJson?.pumpDelaySeconds ?? 0);
+    const valveDelaySeconds = Number(input.relation.relationConfigJson?.valveDelaySeconds ?? 0);
+    const steps =
+      sequence === 'simultaneous'
+        ? [
+            {
+              role: 'well',
+              deviceId: targets.wellDeviceId,
+              imei: targets.wellImei,
+              commandCode: 'START_SESSION',
+              delaySeconds: 0
+            },
+            {
+              role: 'pump',
+              deviceId: targets.pumpDeviceId,
+              imei: targets.pumpImei,
+              commandCode: 'START_PUMP',
+              delaySeconds: pumpDelaySeconds
+            },
+            {
+              role: 'valve',
+              deviceId: targets.valveDeviceId,
+              imei: targets.valveImei,
+              commandCode: 'OPEN_VALVE',
+              delaySeconds: valveDelaySeconds
+            }
+          ]
+        : sequence === 'pump_first'
+          ? [
+              {
+                role: 'well',
+                deviceId: targets.wellDeviceId,
+                imei: targets.wellImei,
+                commandCode: 'START_SESSION',
+                delaySeconds: 0
+              },
+              {
+                role: 'pump',
+                deviceId: targets.pumpDeviceId,
+                imei: targets.pumpImei,
+                commandCode: 'START_PUMP',
+                delaySeconds: pumpDelaySeconds
+              },
+              {
+                role: 'valve',
+                deviceId: targets.valveDeviceId,
+                imei: targets.valveImei,
+                commandCode: 'OPEN_VALVE',
+                delaySeconds: valveDelaySeconds
+              }
+            ]
+          : [
+              {
+                role: 'well',
+                deviceId: targets.wellDeviceId,
+                imei: targets.wellImei,
+                commandCode: 'START_SESSION',
+                delaySeconds: 0
+              },
+              {
+                role: 'valve',
+                deviceId: targets.valveDeviceId,
+                imei: targets.valveImei,
+                commandCode: 'OPEN_VALVE',
+                delaySeconds: valveDelaySeconds
+              },
+              {
+                role: 'pump',
+                deviceId: targets.pumpDeviceId,
+                imei: targets.pumpImei,
+                commandCode: 'START_PUMP',
+                delaySeconds: pumpDelaySeconds
+              }
+            ];
+
+    const queuedCommands: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (!step.deviceId || !step.imei) continue;
+      const queued = await this.deviceGatewayService.queueCommand(
+        {
+          target_device_id: step.deviceId,
+          imei: step.imei,
+          session_id: input.sessionId,
+          session_ref: input.sessionRef,
+          order_id: input.orderId,
+          command_code: step.commandCode,
+          start_token: startToken,
+          create_dispatch: true,
+          request_payload: {
+            requested_from: 'runtime_engine',
+            command_plan: 'session_start',
+            relation_id: input.relation.relationId,
+            sequence_mode: sequence,
+            step_no: index + 1,
+            role: step.role,
+            delay_seconds: step.delaySeconds
+          },
+          source: 'runtime_engine'
+        },
+        input.client
+      );
+      queuedCommands.push({
+        step_no: index + 1,
+        role: step.role,
+        delay_seconds: step.delaySeconds,
+        ...queued.command
+      });
+    }
+
+    return {
+      startToken,
+      sequence,
+      queued_commands: queuedCommands
+    };
+  }
+
+  private async queueSessionStopCommands(input: {
+    sessionId: string;
+    sessionRef: string | null;
+    orderId: string;
+    relation: Record<string, any>;
+    client: PoolClient;
+  }) {
+    const targets = await this.runtimeRepository.findSessionControlTargets(
+      {
+        wellId: input.relation.wellId,
+        pumpId: input.relation.pumpId,
+        valveId: input.relation.valveId
+      },
+      input.client
+    );
+
+    if (!targets) {
+      return {
+        stopToken: null,
+        queued_commands: []
+      };
+    }
+
+    const stopToken = `stop-${input.sessionId.slice(0, 8)}`;
+    const steps = [
+      {
+        role: 'valve',
+        deviceId: targets.valveDeviceId,
+        imei: targets.valveImei,
+        commandCode: 'CLOSE_VALVE',
+        delaySeconds: 0
+      },
+      {
+        role: 'pump',
+        deviceId: targets.pumpDeviceId,
+        imei: targets.pumpImei,
+        commandCode: 'STOP_PUMP',
+        delaySeconds: 3
+      },
+      {
+        role: 'well',
+        deviceId: targets.wellDeviceId,
+        imei: targets.wellImei,
+        commandCode: 'STOP_SESSION',
+        delaySeconds: 6
+      }
+    ];
+
+    const queuedCommands: Array<Record<string, unknown>> = [];
+    for (let index = 0; index < steps.length; index += 1) {
+      const step = steps[index];
+      if (!step.deviceId || !step.imei) continue;
+      const queued = await this.deviceGatewayService.queueCommand(
+        {
+          target_device_id: step.deviceId,
+          imei: step.imei,
+          session_id: input.sessionId,
+          session_ref: input.sessionRef,
+          order_id: input.orderId,
+          command_code: step.commandCode,
+          start_token: stopToken,
+          create_dispatch: true,
+          request_payload: {
+            requested_from: 'runtime_engine',
+            command_plan: 'session_stop',
+            relation_id: input.relation.relationId,
+            step_no: index + 1,
+            role: step.role,
+            delay_seconds: step.delaySeconds
+          },
+          source: 'runtime_engine'
+        },
+        input.client
+      );
+      queuedCommands.push({
+        step_no: index + 1,
+        role: step.role,
+        delay_seconds: step.delaySeconds,
+        ...queued.command
+      });
+    }
+
+    return {
+      stopToken,
+      queued_commands: queuedCommands
+    };
+  }
+
+  async createSession(decisionId: string, cardToken?: string | null) {
+    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser(cardToken);
 
     return this.runtimeRepository.withTransaction(async (client) => {
       const decision = await this.runtimeRepository.findDecisionById(decisionId, client, true);
@@ -253,6 +540,8 @@ export class RuntimeService {
           sceneCode: decision.sceneCode
         },
         runtimeUser.id,
+        runtimeUser.tenantId,
+        cardToken,
         client
       );
 
@@ -273,6 +562,10 @@ export class RuntimeService {
         throw new AppException(ErrorCodes.POLICY_NOT_EFFECTIVE, 'Runtime decision is missing effective policy data');
       }
 
+      const sessionRef = `SIM-${Date.now()}`;
+      const orderChannel = cardToken?.trim() ? 'CARD' : 'QR';
+      const fundingMode = cardToken?.trim() ? 'card_wallet' : 'qr_postpaid';
+
       const session = await this.runtimeRepository.createRuntimeSession(
         {
           tenantId: decision.tenantId,
@@ -280,10 +573,14 @@ export class RuntimeService {
           wellId: relation.wellId,
           pumpId: relation.pumpId,
           valveId: relation.valveId,
+          sessionRef,
           sourceDecisionId: decision.id,
           telemetrySnapshot: {
             startedBy: 'phase-1-runtime',
             traceId: randomUUID(),
+            sessionRef,
+            orderChannel,
+            fundingMode,
             effectiveRuleSnapshot: guard.effectiveRuleSnapshot,
             pricePreview: guard.pricePreview
           }
@@ -317,7 +614,9 @@ export class RuntimeService {
           userId: decision.userId,
           billingPackageId: billing.billingPackageId,
           pricingSnapshot,
-          pricingDetail: this.buildDraftPricingDetail(pricingSnapshot, guard.effectiveRuleSnapshot, guard.pricePreview)
+          pricingDetail: this.buildDraftPricingDetail(pricingSnapshot, guard.effectiveRuleSnapshot, guard.pricePreview),
+          orderChannel,
+          fundingMode
         },
         client
       );
@@ -331,6 +630,14 @@ export class RuntimeService {
           idempotent: true
         });
       }
+
+      const queuedStartCommands = await this.queueSessionStartCommands({
+        sessionId: session.id,
+        sessionRef,
+        orderId: order.id,
+        relation,
+        client
+      });
 
       await this.sessionStatusLogRepository.create(
         {
@@ -346,7 +653,9 @@ export class RuntimeService {
           snapshot: {
             decisionId,
             pricePreview: guard.pricePreview,
-            effectiveRuleSource: snapshot.resolved_from ?? {}
+            effectiveRuleSource: snapshot.resolved_from ?? {},
+            sessionRef,
+            queuedStartCommands
           }
         },
         client
@@ -355,13 +664,15 @@ export class RuntimeService {
       return {
         sessionId: session.id,
         status: session.status,
-        sessionNo: session.sessionNo
+        sessionNo: session.sessionNo,
+        sessionRef,
+        queuedCommands: queuedStartCommands.queued_commands
       };
     });
   }
 
-  async createSessionFromWellIdentifier(wellIdentifier: string) {
-    const decision = await this.createStartDecisionForWellIdentifier(wellIdentifier);
+  async createSessionFromWellIdentifier(wellIdentifier: string, cardToken?: string | null) {
+    const decision = await this.createStartDecisionForWellIdentifier(wellIdentifier, cardToken);
 
     if (decision.result !== 'allow') {
       throw new AppException(
@@ -378,10 +689,31 @@ export class RuntimeService {
       );
     }
 
-    return this.createSession(decision.decisionId);
+    return this.createSession(decision.decisionId, cardToken);
   }
 
-  async createStartDecisionForWellIdentifier(wellIdentifier: string) {
+  async sendTestCommand(deviceIdentifier: string, action: string) {
+    const device = await this.runtimeRepository.findDeviceByIdentifier(deviceIdentifier);
+    if (!device) {
+      throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Target device was not found', 404, {
+        targetId: deviceIdentifier
+      });
+    }
+
+    return this.deviceGatewayService.queueCommand({
+      target_device_id: device.id,
+      imei: device.imei ?? undefined,
+      command_code: action,
+      request_payload: {
+        requested_from: 'manual_test',
+        requested_action: action,
+        target_device_code: device.deviceCode
+      },
+      source: 'manual_test'
+    });
+  }
+
+  async createStartDecisionForWellIdentifier(wellIdentifier: string, cardToken?: string | null) {
     const resolvedWellId = await this.runtimeRepository.findWellIdByIdentifier(wellIdentifier);
     if (!resolvedWellId) {
       throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Target well was not found', 404, {
@@ -389,15 +721,18 @@ export class RuntimeService {
       });
     }
 
-    return this.runtimeDecisionService.createStartDecision({
-      targetType: 'well',
-      targetId: resolvedWellId,
-      sceneCode: 'farmer_scan_start'
-    });
+    return this.runtimeDecisionService.createStartDecision(
+      {
+        targetType: 'well',
+        targetId: resolvedWellId,
+        sceneCode: 'farmer_scan_start'
+      },
+      { cardToken }
+    );
   }
 
-  async getCurrentSession() {
-    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser();
+  async getCurrentSession(cardToken?: string | null) {
+    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser(cardToken);
     const session = await this.runtimeRepository.findCurrentSessionByUserId(runtimeUser.id);
     if (!session) {
       return null;
@@ -421,13 +756,14 @@ export class RuntimeService {
     return {
       id: session.id,
       well_name: session.wellDisplayName ?? session.wellCode ?? session.wellId,
-      status: session.status === 'running' ? 'running' : 'ended',
+      status: session.status === 'ended' ? 'ended' : 'running',
       usage: Number(usage ?? 0),
       unit,
       duration_minutes: Math.max(1, Math.ceil(durationSeconds / 60)),
       cost: Number(session.amount ?? 0),
       billing_package: session.billingPackageName ?? '--',
-      unit_price: Number(pricingDetail.unit_price ?? 0)
+      unit_price: Number(pricingDetail.unit_price ?? 0),
+      awaiting_device_ack: session.status === 'stopping'
     };
   }
 
@@ -440,28 +776,52 @@ export class RuntimeService {
   }
 
   async listRuntimeContainers() {
-    return [
-      {
-        id: 'runtime-api',
-        name: 'Runtime API',
-        status: 'running',
-        cpu: '0.2 vCPU',
-        mem: '128 MB',
-        uptime: 'local-dev'
-      },
-      {
-        id: 'postgres',
-        name: 'PostgreSQL',
-        status: 'running',
-        cpu: '0.3 vCPU',
-        mem: '256 MB',
-        uptime: 'docker'
-      }
-    ];
+    return this.runtimeRepository.findRuntimeContainers();
   }
 
-  async stopSession(sessionId: string) {
-    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser();
+  async getSessionObservability(sessionId: string) {
+    const session = await this.runtimeRepository.findSessionObservabilityById(sessionId);
+    if (!session) {
+      throw new AppException(ErrorCodes.SESSION_NOT_FOUND, 'Runtime session not found', 404, {
+        sessionId,
+        status: 'not_found'
+      });
+    }
+
+    const statusLogs = await this.sessionStatusLogRepository.findBySessionId(sessionId);
+    const commands = await this.runtimeRepository.findCommandsBySessionId(sessionId);
+
+    return {
+      session: {
+        id: session.id,
+        session_no: session.sessionNo,
+        status: session.status,
+        user: session.userDisplayName ?? session.userId,
+        well: session.wellDisplayName ?? session.wellCode ?? session.wellId,
+        started_at: session.startedAt,
+        ended_at: session.endedAt,
+        runtime_container_id: session.runtimeContainerId,
+        telemetry_snapshot: session.telemetrySnapshot ?? {}
+      },
+      order: session.orderId
+        ? {
+            id: session.orderId,
+            order_no: session.orderNo,
+            status: session.orderStatus,
+            settlement_status: session.settlementStatus,
+            amount: Number(session.amount ?? 0),
+            charge_duration_sec: Number(session.chargeDurationSec ?? 0),
+            charge_volume: Number(session.chargeVolume ?? 0),
+            pricing_detail: session.pricingDetail ?? {}
+          }
+        : null,
+      commands,
+      status_logs: statusLogs
+    };
+  }
+
+  async stopSession(sessionId: string, cardToken?: string | null) {
+    const runtimeUser = await this.runtimeDecisionService.getRuntimeUser(cardToken);
 
     return this.runtimeRepository.withTransaction(async (client) => {
       const session = await this.runtimeRepository.findSessionById(sessionId, client, true);
@@ -495,6 +855,18 @@ export class RuntimeService {
         });
       }
 
+      if (session.status === 'stopping') {
+        return {
+          sessionId: session.id,
+          status: session.status,
+          order,
+          sessionRef: session.sessionRef ?? `SIM-${session.id.slice(0, 8)}`,
+          queuedCommands: [],
+          awaitingDeviceAck: true,
+          idempotent: true
+        };
+      }
+
       if (!['pending_start', 'running', 'billing', 'stopping'].includes(session.status)) {
         throw new AppException(ErrorCodes.SESSION_NOT_STOPPABLE, 'Runtime session is not in a stoppable state', 400, {
           sessionId,
@@ -502,19 +874,35 @@ export class RuntimeService {
         });
       }
 
+      const sessionRef = session.sessionRef ?? `SIM-${session.id.slice(0, 8)}`;
+      const queuedStopCommands = await this.queueSessionStopCommands({
+        sessionId,
+        sessionRef,
+        orderId: order.id,
+        relation: {
+          relationId: null,
+          wellId: session.wellId,
+          pumpId: session.pumpId,
+          valveId: session.valveId
+        },
+        client
+      });
+
       await this.sessionStatusLogRepository.create(
         {
           tenantId: session.tenantId,
           sessionId,
           fromStatus: session.status,
-          toStatus: 'ending',
-          actionCode: 'stop_session_accepted',
+          toStatus: 'stopping',
+          actionCode: 'stop_session_requested',
           reasonCode: 'MANUAL_STOP',
-          reasonText: 'stop request accepted',
+          reasonText: 'stop request accepted and waiting for device acknowledgement',
           source: 'manual',
           actorId: runtimeUser.id,
           snapshot: {
-            currentOrderStatus: order.status
+            currentOrderStatus: order.status,
+            sessionRef,
+            queuedStopCommands
           }
         },
         client
@@ -527,81 +915,13 @@ export class RuntimeService {
         });
       }
 
-      await this.sessionStatusLogRepository.create(
-        {
-          tenantId: stopped.tenantId,
-          sessionId,
-          fromStatus: 'ending',
-          toStatus: 'ended',
-          actionCode: 'stop_session_completed',
-          reasonCode: 'MANUAL_STOP',
-          reasonText: 'session stop completed',
-          source: 'runtime_engine',
-          actorId: runtimeUser.id,
-          snapshot: {}
-        },
-        client
-      );
-
-      const startedAt = new Date(stopped.startedAt);
-      const endedAt = new Date(stopped.endedAt);
-      const durationSec = Math.max(1, Math.ceil((endedAt.getTime() - startedAt.getTime()) / 1000));
-      const pricingSnapshot = (order.pricingSnapshot ?? {}) as Record<string, any>;
-      const unitPrice = Number(pricingSnapshot.unitPrice ?? 0);
-      const minChargeAmount = Number(pricingSnapshot.minChargeAmount ?? 0);
-      const mode = String(pricingSnapshot.mode ?? 'duration');
-
-      let amount = 0;
-      if (mode === 'duration') {
-        amount = Math.max(minChargeAmount, Math.ceil(durationSec / 60) * unitPrice);
-      } else if (mode === 'flat') {
-        amount = Math.max(minChargeAmount, unitPrice);
-      } else if (mode === 'free') {
-        amount = 0;
-      } else {
-        amount = Math.max(minChargeAmount, unitPrice);
-      }
-
-      const finalized = await this.orderRepository.finalize(
-        {
-          orderId: order.id,
-          chargeDurationSec: durationSec,
-          amount,
-          pricingSnapshot: {
-            ...pricingSnapshot,
-            breakdown: [
-              { item: 'runtime_duration_seconds', value: durationSec },
-              { item: 'amount', value: amount }
-            ]
-          },
-          pricingDetail: this.buildSettledPricingDetail(order.pricingDetail ?? {}, pricingSnapshot, durationSec, amount)
-        },
-        client
-      );
-
-      await this.sessionStatusLogRepository.create(
-        {
-          tenantId: stopped.tenantId,
-          sessionId,
-          fromStatus: 'ended',
-          toStatus: 'settled',
-          actionCode: 'settle_success',
-          reasonCode: 'ORDER_SETTLED',
-          reasonText: 'irrigation order settled successfully',
-          source: 'runtime_engine',
-          actorId: runtimeUser.id,
-          snapshot: {
-            orderId: order.id,
-            finalAmount: finalized.amount
-          }
-        },
-        client
-      );
-
       return {
         sessionId: stopped.id,
         status: stopped.status,
-        order: finalized
+        order,
+        sessionRef,
+        queuedCommands: queuedStopCommands.queued_commands,
+        awaitingDeviceAck: true
       };
     });
   }

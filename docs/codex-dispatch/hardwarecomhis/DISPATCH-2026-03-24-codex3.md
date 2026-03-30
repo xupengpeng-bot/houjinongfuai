@@ -11,11 +11,11 @@ Paused note:
 
 ## Read first
 
-1. `hardwarecomhis/README.md`
+1. `docs/codex-dispatch/hardwarecomhis/README.md`
 2. `docs/governance/delivery-workflow.md`
-3. `hardwarecomhis/HW-0001-通信与供电接口基线.md`
-4. `hardwarecomhis/context/HW-0001-context.md`
-5. `hardwarecomhis/fixtures/HW-0001/*`
+3. `docs/codex-dispatch/hardwarecomhis/HW-0001-通信与供电接口基线.md`
+4. `docs/codex-dispatch/hardwarecomhis/context/HW-0001-context.md`
+5. `docs/codex-dispatch/hardwarecomhis/fixtures/HW-0001/*`
 
 ## Execute now
 
@@ -37,7 +37,7 @@ Deliver at least:
 ## Git rules
 
 - If there is a dedicated hardware repo or package location, commit there and return the revision or commit SHA.
-- If there is no dedicated hardware repo in the current environment, place the result files under `hardwarecomhis/` and commit those artifacts in this repo.
+- If there is no dedicated hardware repo in the current environment, place the result files under `docs/codex-dispatch/hardwarecomhis/` and commit those artifacts in this repo.
 - Do not fabricate a revision id.
 - Do not commit unrelated binaries, local caches, or temporary export files unless they are the actual requested deliverables.
 

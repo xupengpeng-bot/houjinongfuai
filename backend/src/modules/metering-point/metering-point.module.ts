@@ -1,9 +1,11 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
-  HttpException,
+  HttpCode,
   HttpStatus,
+  HttpException,
   Injectable,
   Module,
   Param,
@@ -509,6 +511,18 @@ class MeteringPointService {
 
     return this.getById(id);
   }
+
+  async delete(id: string) {
+    await this.getById(id);
+
+    await this.db.query(
+      `
+      delete from metering_point
+      where tenant_id = $1 and id = $2
+      `,
+      [TENANT_ID, id]
+    );
+  }
 }
 
 @Controller('metering-points')
@@ -548,6 +562,12 @@ class MeteringPointController {
   @Put(':id')
   update(@Param('id') id: string, @Body() dto: UpdateMeteringPointDto) {
     return this.service.update(id, dto);
+  }
+
+  @Delete(':id')
+  @HttpCode(HttpStatus.NO_CONTENT)
+  async delete(@Param('id') id: string) {
+    await this.service.delete(id);
   }
 }
 

@@ -1,2 +1,8 @@
 .web-test/
 backend/*.log
+*.err
+*.out
+**/__pycache__/
+backend/var/
+.cursor/
+backend/tmp-test-network.geojson

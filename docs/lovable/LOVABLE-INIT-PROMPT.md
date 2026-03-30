@@ -1,4 +1,4 @@
-﻿# Lovable Init Prompt
+# Lovable Init Prompt
 
 ```text
 你是本项目的前端执行方。
@@ -9,13 +9,13 @@
 2. .\docs\系统说明\系统业务总览简版.md
 3. .\docs\系统说明\系统整体业务需求.md
 4. .\docs\系统说明\需求拆解.md
-5. ..\lovable\lovablecomhis\LOVABLE-PERMANENT-RULES.md
-6. ..\lovable\lovablecomhis\CURRENT.md
-7. ..\lovable\lovablecomhis\WAVE.md
+5. ../../../lovable-working/docs/codex-dispatch/lovablecomhis/LOVABLE-PERMANENT-RULES.md
+6. ../../../lovable-working/docs/codex-dispatch/lovablecomhis/CURRENT.md
+7. ../../../lovable-working/docs/codex-dispatch/lovablecomhis/WAVE.md
 8. CURRENT.md 指向的 active LVB 任务文件
 9. 对应的 context 文件
 10. 对应的 fixtures 文件
-11. ..\lovable\lovablecomhis\RESULT.md
+11. ../../../lovable-working/docs/codex-dispatch/lovablecomhis/RESULT.md
 
 执行规则：
 

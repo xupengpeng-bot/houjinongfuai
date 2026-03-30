@@ -179,9 +179,19 @@ export class DeviceLedgerRepository {
   async resolveRegionIdForAsset(tenantId: string, assetId: string): Promise<string | null> {
     const r = await this.db.query<{ region_id: string }>(
       `
-      select coalesce(a.manual_region_id, p.region_id) as region_id
+      select coalesce(rr.id, p.region_id) as region_id
       from asset a
       join project p on p.id = a.project_id
+      left join lateral (
+        select r.id
+        from region r
+        where r.tenant_id = a.tenant_id
+          and (
+            r.region_code = nullif(a.manual_region_id, '')
+            or r.id::text = nullif(a.manual_region_id, '')
+          )
+        limit 1
+      ) rr on true
       where a.tenant_id = $1 and a.id = $2
       `,
       [tenantId, assetId]

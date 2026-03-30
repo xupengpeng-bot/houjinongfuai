@@ -15,19 +15,19 @@ Purpose: this is the only live execution entry for embedded work. When PM or the
 
 ## Allowed working area
 
-- `.\embeddedcomhis`
+- `docs/codex-dispatch/embeddedcomhis`
 - dedicated firmware repo only after PM explicitly points to it
 
 Do not modify backend, frontend, or hardware directories unless PM changes this file.
 
 ## Read order once reopened
 
-1. `embeddedcomhis/README.md`
+1. `docs/codex-dispatch/embeddedcomhis/README.md`
 2. `docs/governance/file-only-command-protocol.md`
 3. `docs/governance/delivery-workflow.md`
-4. `embeddedcomhis/EMB-0001-tcp-json-v1固件接入基线.md`
-5. `embeddedcomhis/context/EMB-0001-context.md`
-6. `embeddedcomhis/fixtures/EMB-0001/*`
+4. `docs/codex-dispatch/embeddedcomhis/EMB-0001-tcp-json-v1固件接入基线.md`
+5. `docs/codex-dispatch/embeddedcomhis/context/EMB-0001-context.md`
+6. `docs/codex-dispatch/embeddedcomhis/fixtures/EMB-0001/*`
 
 ## Execute now
 
@@ -43,4 +43,4 @@ Do not modify backend, frontend, or hardware directories unless PM changes this 
 
 ## Result writeback
 
-When reopened and executed, update `embeddedcomhis/RESULT.md`.
+When reopened and executed, update `docs/codex-dispatch/embeddedcomhis/RESULT.md`.

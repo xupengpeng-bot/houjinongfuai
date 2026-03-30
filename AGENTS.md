@@ -79,7 +79,7 @@
 ## Collaboration boundary
 
 - Do not directly modify frontend business pages, business hooks, or business services.
-- If frontend cooperation is required, dispatch only through `lovablecomhis/` and `fixtures/`.
+- If frontend cooperation is required, dispatch only through the **frontend** repository path `docs/codex-dispatch/lovablecomhis/` (task markdown, `context/`, `fixtures/`), not ad-hoc edits to business pages.
 - If there is no frontend task, do not output Lovable instructions.
 
 ## UAT test data cleanup rule

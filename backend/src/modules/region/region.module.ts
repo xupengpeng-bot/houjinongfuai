@@ -251,7 +251,8 @@ class RegionController {
 
   @Get('options')
   async options() {
-    return await this.listCanonicalRegions();
+    const items = await this.listCanonicalRegions();
+    return ok({ items });
   }
 
   @Get('cascade-options')

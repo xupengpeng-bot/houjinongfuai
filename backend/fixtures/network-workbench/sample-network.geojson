@@ -1,0 +1,79 @@
+{
+  "type": "FeatureCollection",
+  "features": [
+    {
+      "type": "Feature",
+      "properties": {
+        "layer": "well_layer",
+        "node_code": "WELL-A",
+        "node_type": "well"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [113.5001, 34.5001]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "layer": "pump_layer",
+        "node_code": "PUMP-A",
+        "node_type": "pump"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [113.5006, 34.5003]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "layer": "valve_layer",
+        "node_code": "VALVE-A",
+        "node_type": "valve"
+      },
+      "geometry": {
+        "type": "Point",
+        "coordinates": [113.5010, 34.5002]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "layer": "pipe_layer",
+        "pipe_code": "PIPE-WP-A",
+        "pipe_type": "well_to_pump",
+        "from_node_code": "WELL-A",
+        "to_node_code": "PUMP-A",
+        "length_m": 12,
+        "diameter_mm": 90
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [113.5001, 34.5001],
+          [113.5006, 34.5003]
+        ]
+      }
+    },
+    {
+      "type": "Feature",
+      "properties": {
+        "layer": "pipe_layer",
+        "pipe_code": "PIPE-PV-A",
+        "pipe_type": "pump_to_valve",
+        "from_node_code": "PUMP-A",
+        "to_node_code": "VALVE-A",
+        "length_m": 18,
+        "diameter_mm": 65
+      },
+      "geometry": {
+        "type": "LineString",
+        "coordinates": [
+          [113.5006, 34.5003],
+          [113.5010, 34.5002]
+        ]
+      }
+    }
+  ]
+}

@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Module, Param, Patch, Post } from '@nestjs/common';
+import { Body, Controller, Get, Module, Param, Patch, Post, Query } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
 
@@ -96,6 +96,61 @@ class IamController {
       order by permission_code asc
     `);
     return ok({ items: result.rows });
+  }
+
+  @Get('audit-logs')
+  async listAuditLogs(
+    @Query('page') pageRaw?: string,
+    @Query('page_size') pageSizeRaw?: string
+  ) {
+    const page = Math.max(1, Number.parseInt(pageRaw ?? '1', 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeRaw ?? '20', 10) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const result = await this.db.query<{
+      id: string;
+      time: Date;
+      user: string | null;
+      action: string;
+      target: string;
+      detail: string;
+      ip: string;
+    }>(
+      `
+      select
+        al.id,
+        al.created_at as time,
+        coalesce(u.display_name, 'system') as "user",
+        upper(al.action_code) as action,
+        concat(al.resource_type, '/', coalesce(al.resource_id::text, '--')) as target,
+        trim(
+          both ' ' from concat_ws(
+            ' ',
+            'module=' || al.module_code,
+            case when al.after_json <> '{}'::jsonb then 'after=' || left(al.after_json::text, 120) else null end,
+            case when al.before_json <> '{}'::jsonb then 'before=' || left(al.before_json::text, 120) else null end
+          )
+        ) as detail,
+        'internal' as ip
+      from audit_log al
+      left join sys_user u on u.id = al.actor_user_id
+      order by al.created_at desc
+      offset $1
+      limit $2
+      `,
+      [offset, pageSize]
+    );
+
+    const totalResult = await this.db.query<{ total: string }>(`select count(*)::text as total from audit_log`);
+    return ok({
+      items: result.rows.map((row) => ({
+        ...row,
+        time: row.time.toISOString()
+      })),
+      total: Number.parseInt(totalResult.rows[0]?.total ?? '0', 10),
+      page,
+      page_size: pageSize
+    });
   }
 }
 

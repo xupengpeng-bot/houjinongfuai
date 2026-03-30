@@ -45,7 +45,11 @@ interface ImportStats {
   invalid: number;
   insertedOrUpdated: number;
   disabled: number;
+  /** 同步到业务表 region（供 /regions/options、项目「所属区域」选用） */
+  provinces_mirrored_to_region: number;
 }
+
+const DEFAULT_TENANT_ID = '00000000-0000-0000-0000-000000000001';
 
 const LEVEL_CODE_LENGTH: Record<RegionLevel, number> = {
   province: 2,
@@ -263,7 +267,8 @@ async function main() {
     skipped: 0,
     invalid: 0,
     insertedOrUpdated: 0,
-    disabled: 0
+    disabled: 0,
+    provinces_mirrored_to_region: 0
   };
 
   const known = new Map<string, NormalizedRegionRecord>();
@@ -376,6 +381,7 @@ async function main() {
   const client = await pool.connect();
   try {
     await client.query('BEGIN');
+    await client.query(`select set_config('app.region_reference_guard_disabled', 'on', true)`);
 
     const values = Array.from(known.values());
     for (const batch of chunk(values, 500)) {
@@ -457,6 +463,42 @@ async function main() {
       );
       stats.disabled = Number(disabledResult.rows[0]?.count ?? '0');
     }
+
+    const mirrorResult = await client.query(
+      `
+      insert into region (
+        tenant_id,
+        parent_id,
+        region_code,
+        region_name,
+        region_type,
+        full_path,
+        manager_user_id,
+        status,
+        created_at,
+        updated_at
+      )
+      select
+        $1::uuid,
+        null,
+        rr.code,
+        rr.name,
+        'province',
+        '/' || rr.code,
+        null,
+        'active',
+        now(),
+        now()
+      from region_reference rr
+      where rr.level = 'province'
+        and rr.parent_code is null
+        and rr.enabled = true
+      on conflict (tenant_id, region_code) do nothing
+      returning id
+      `,
+      [DEFAULT_TENANT_ID]
+    );
+    stats.provinces_mirrored_to_region = mirrorResult.rowCount ?? 0;
 
     await client.query('COMMIT');
   } catch (error) {

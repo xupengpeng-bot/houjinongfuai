@@ -6,10 +6,18 @@ param(
 $ErrorActionPreference = "Stop"
 
 $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
-$DefaultFrontendDir = Join-Path (Split-Path $RootDir -Parent) "lovable"
+$WorkspaceParent = Split-Path $RootDir -Parent
+$LovableWorking = Join-Path $WorkspaceParent "lovable-working"
+$LovableLegacy = Join-Path $WorkspaceParent "lovable"
 
 if ([string]::IsNullOrWhiteSpace($FrontendDir)) {
-  $FrontendDir = $DefaultFrontendDir
+  if (Test-Path (Join-Path $LovableWorking "package.json")) {
+    $FrontendDir = $LovableWorking
+  } elseif (Test-Path (Join-Path $LovableLegacy "package.json")) {
+    $FrontendDir = $LovableLegacy
+  } else {
+    $FrontendDir = $LovableWorking
+  }
 }
 
 $FrontendDir = [System.IO.Path]::GetFullPath($FrontendDir)
@@ -20,8 +28,18 @@ function Write-Step([string]$Message) {
   Write-Host "[frontend] $Message" -ForegroundColor Green
 }
 
-if (-not (Test-Path $FrontendDir)) {
-  throw "Frontend directory not found: $FrontendDir. Pass -FrontendDir <path> or place the frontend repo in the sibling folder '..\\lovable'."
+if (-not (Test-Path $FrontendDir) -or -not (Test-Path (Join-Path $FrontendDir "package.json"))) {
+  throw @"
+Frontend not found or missing package.json: $FrontendDir
+
+Fix one of:
+  1) Clone/checkout the Vite app next to this repo, e.g.:
+     $LovableWorking
+  2) Or pass an explicit path:
+     .\start-frontend.ps1 -FrontendDir 'D:\path\to\your-frontend'
+
+Expected sibling folder names (under $WorkspaceParent): lovable-working (preferred) or lovable.
+"@
 }
 
 if (-not (Test-Path $FrontendEnv) -and (Test-Path $FrontendEnvExample)) {
