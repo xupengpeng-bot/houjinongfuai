@@ -3,6 +3,7 @@ import { execFileSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
+import iconv from 'iconv-lite';
 import { BadRequestException, Injectable } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
 import { DeviceGatewayMaintainerService } from '../device-gateway/device-gateway-maintainer.service';
@@ -634,7 +635,18 @@ export class NetworkWorkbenchService {
         };
       }
 
-      const parsed = this.parseJsonFile(outputPath);
+      let parsed: unknown;
+      try {
+        parsed = this.parseGeoJsonFileUtf8OrGb18030(outputPath);
+      } catch {
+        return {
+          parser_mode: 'dwg_binary_failed',
+          feature_collection: null as Record<string, unknown> | null,
+          error: 'raw_dwg_parser_invalid_geojson',
+          dwg_version: dwgVersion,
+          tool_stderr: null as string | null
+        };
+      }
       const object = this.asObject(parsed);
       return {
         parser_mode: 'dwg_libredwg_geojson',
@@ -707,6 +719,29 @@ export class NetworkWorkbenchService {
 
   private parseJsonFile(filePath: string) {
     return JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
+  }
+
+  /**
+   * dwgread 在 Windows 上可能按系统代码页写出 GeoJSON（常见 GB18030），按 UTF-8 读会整文件解析失败或图层名乱码。
+   * 先 UTF-8；JSON 语法失败再按 GB18030 解码后解析。
+   */
+  private parseGeoJsonFileUtf8OrGb18030(filePath: string): unknown {
+    let buf: Buffer = fs.readFileSync(filePath);
+    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+      buf = buf.subarray(3);
+    }
+    let utf8Err: Error | null = null;
+    try {
+      return JSON.parse(buf.toString('utf8')) as unknown;
+    } catch (e) {
+      utf8Err = e instanceof Error ? e : new Error(String(e));
+    }
+    try {
+      const text = iconv.decode(buf, 'gb18030');
+      return JSON.parse(text) as unknown;
+    } catch {
+      throw utf8Err;
+    }
   }
 
   private buildGraphPreview(graphDraft: WorkbenchGraphDraft | null) {
