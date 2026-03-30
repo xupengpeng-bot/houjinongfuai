@@ -1,14 +1,32 @@
-import { Controller, Get, Module } from '@nestjs/common';
+import { Controller, Get, Logger, Module } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
 
+const DASHBOARD_STATS_ZERO = {
+  total_wells: 0,
+  running_wells: 0,
+  total_devices: 0,
+  online_devices: 0,
+  today_orders: 0,
+  today_usage: 0,
+  today_revenue: 0,
+  pending_alerts: 0,
+  open_work_orders: 0,
+  monthly_usage: 0,
+  monthly_revenue: 0,
+  device_online_rate: 0
+};
+
 @Controller('dashboard')
 class DashboardController {
+  private readonly log = new Logger(DashboardController.name);
+
   constructor(private readonly db: DatabaseService) {}
 
   @Get('stats')
   async stats() {
-    const result = await this.db.query<{
+    try {
+      const result = await this.db.query<{
       total_wells: number;
       running_wells: number;
       total_devices: number;
@@ -72,13 +90,13 @@ class DashboardController {
             greatest((select count(*)::numeric from device), 1)
           ) * 100, 1)
         end as device_online_rate
-    `);
-    const stats = result.rows[0];
-
-    return {
-      ...ok(stats),
-      ...stats
-    };
+      `);
+      const stats = result.rows[0];
+      return ok(stats ?? DASHBOARD_STATS_ZERO);
+    } catch (e) {
+      this.log.warn(`dashboard stats fallback to zeros: ${e instanceof Error ? e.message : String(e)}`);
+      return ok(DASHBOARD_STATS_ZERO);
+    }
   }
 
   @Get('overview')
