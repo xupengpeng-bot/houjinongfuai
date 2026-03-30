@@ -1469,9 +1469,6 @@ export class NetworkWorkbenchService {
       : [];
 
     const nodeCodes = new Set(nodes.map((item) => item.node_code));
-    if (nodeCodes.size !== nodes.length) {
-      throw new BadRequestException('graph_draft has duplicate node_code');
-    }
 
     const pipes = Array.isArray(draft?.pipes)
       ? draft!.pipes
