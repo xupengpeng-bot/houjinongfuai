@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto';
-import { execFileSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
 import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
@@ -478,7 +478,7 @@ export class NetworkWorkbenchService {
     const normalize = (value: unknown) => {
       if (typeof value !== 'string') return null;
       const trimmed = value.trim();
-      return trimmed || null;
+      return trimmed ? this.normalizeTextForWorkbenchStorage(trimmed) : null;
     };
 
     return {
@@ -535,15 +535,7 @@ export class NetworkWorkbenchService {
     const values = new Set<string>();
     for (const feature of features) {
       const props = this.asObject(feature?.properties);
-      const layerName = this.readString(props, [
-        'layer',
-        'Layer',
-        'layer_name',
-        'LayerName',
-        'cad_layer',
-        'group',
-        'category'
-      ]);
+      const layerName = this.readLayerNameFromFeatureProps(props);
       if (layerName) values.add(layerName);
     }
     return [...values];
@@ -584,6 +576,149 @@ export class NetworkWorkbenchService {
     return ` 文件头版本：${version}。`;
   }
 
+  /**
+   * 从可能含前置日志/尾部杂讯的文本中截取并解析第一个完整顶层 JSON 对象（花括号平衡，尊重字符串内引号）。
+   */
+  private tryParseFirstJsonObjectFromText(text: string): unknown | null {
+    const start = text.indexOf('{');
+    if (start < 0) return null;
+    let depth = 0;
+    let inString = false;
+    let escape = false;
+    for (let i = start; i < text.length; i++) {
+      const c = text[i];
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      if (c === '\\' && inString) {
+        escape = true;
+        continue;
+      }
+      if (c === '"') {
+        inString = !inString;
+        continue;
+      }
+      if (inString) continue;
+      if (c === '{') depth++;
+      else if (c === '}') {
+        depth--;
+        if (depth === 0) {
+          try {
+            return JSON.parse(text.slice(start, i + 1)) as unknown;
+          } catch {
+            return null;
+          }
+        }
+      }
+    }
+    return null;
+  }
+
+  /**
+   * dwgread 有时写出单个 Feature、Feature 数组，或非数组的 features；统一成 RFC 7946 FeatureCollection。
+   */
+  private coerceLibredwgOutputToFeatureCollection(parsed: unknown): {
+    featureCollection: Record<string, unknown> | null;
+    note: string | null;
+  } {
+    if (Array.isArray(parsed)) {
+      const items = parsed as unknown[];
+      if (items.length === 0) {
+        return {
+          featureCollection: { type: 'FeatureCollection', features: [] },
+          note: '根节点为空数组，已规范为空 FeatureCollection。'
+        };
+      }
+      if (items.every((item) => this.asObject(item).type === 'Feature')) {
+        return {
+          featureCollection: { type: 'FeatureCollection', features: items },
+          note: '已将根节点从 Feature 数组规范为 FeatureCollection。'
+        };
+      }
+      return { featureCollection: null, note: null };
+    }
+
+    const obj = this.asObject(parsed);
+    const t = typeof obj.type === 'string' ? obj.type : '';
+
+    if (t === 'FeatureCollection') {
+      let features = obj.features;
+      if (!Array.isArray(features)) {
+        features = [];
+      }
+      return {
+        featureCollection: { ...obj, type: 'FeatureCollection', features },
+        note: Array.isArray(obj.features) ? null : 'features 非数组，已按空数组处理。'
+      };
+    }
+
+    if (t === 'Feature') {
+      return {
+        featureCollection: { type: 'FeatureCollection', features: [obj] },
+        note: '已将根节点从单个 Feature 规范为 FeatureCollection。'
+      };
+    }
+
+    return { featureCollection: null, note: null };
+  }
+
+  /** 读取 dwgread 输出文件：严格 JSON 失败后按编码再试截取首个对象。 */
+  private parseDwgreadGeoJsonOutputFile(outputPath: string):
+    | { ok: true; parsed: unknown; lenient_note: string | null; head_preview: string }
+    | { ok: false; parse_error_message: string | null; head_preview: string } {
+    const buf = fs.readFileSync(outputPath);
+    const headPreview = buf
+      .subarray(0, Math.min(320, buf.length))
+      .toString('utf8')
+      .replace(/\s+/g, ' ')
+      .trim();
+
+    let parseErrorMessage: string | null = null;
+    try {
+      return {
+        ok: true,
+        parsed: this.parseJsonBufferAdaptive(buf),
+        lenient_note: null,
+        head_preview: headPreview
+      };
+    } catch (e) {
+      parseErrorMessage = e instanceof Error ? e.message : String(e);
+    }
+
+    const body = this.stripUtf8BomFromBuffer(buf);
+    const encodings: Array<'utf8' | 'gb18030' | 'gbk'> = ['utf8', 'gb18030', 'gbk'];
+    for (const enc of encodings) {
+      const text = enc === 'utf8' ? body.toString('utf8') : iconv.decode(body, enc);
+      const trimmed = text.trim();
+      try {
+        return {
+          ok: true,
+          parsed: JSON.parse(trimmed) as unknown,
+          lenient_note: null,
+          head_preview: headPreview
+        };
+      } catch {
+        /* continue */
+      }
+      const sliced = this.tryParseFirstJsonObjectFromText(text);
+      if (sliced != null) {
+        return {
+          ok: true,
+          parsed: sliced,
+          lenient_note: `已忽略输出文件中的非 JSON 前后缀并从首个「{…}」对象解析（${enc}）。`,
+          head_preview: headPreview
+        };
+      }
+    }
+
+    return {
+      ok: false,
+      parse_error_message: parseErrorMessage,
+      head_preview: headPreview
+    };
+  }
+
   private parseRawDwgAsGeoJson(filePath: string) {
     const dwgVersion = this.readDwgFileVersionTag(filePath);
     const dwgreadPath = this.resolveDwgreadPath();
@@ -601,27 +736,36 @@ export class NetworkWorkbenchService {
     const outputPath = path.join(tempDir, `${path.parse(filePath).name}.geojson`);
 
     try {
-      try {
-        execFileSync(dwgreadPath, ['-O', 'GeoJSON', '-o', outputPath, filePath], {
-          windowsHide: true,
-          timeout: 120_000,
-          encoding: 'utf8',
-          maxBuffer: 20 * 1024 * 1024
-        });
-      } catch (execErr: unknown) {
-        const e = execErr as { stderr?: string; message?: string };
-        const stderr =
-          typeof e.stderr === 'string' && e.stderr.trim()
-            ? e.stderr.trim().slice(0, 2000)
-            : execErr instanceof Error && execErr.message
-              ? execErr.message.slice(0, 2000)
-              : null;
+      const run = spawnSync(dwgreadPath, ['-O', 'GeoJSON', '-o', outputPath, filePath], {
+        windowsHide: true,
+        timeout: 120_000,
+        encoding: 'utf8',
+        maxBuffer: 20 * 1024 * 1024
+      });
+      const stderrCombined = [run.stderr, run.stdout]
+        .filter((s): s is string => typeof s === 'string' && Boolean(s.trim()))
+        .join('\n')
+        .trim()
+        .slice(0, 2000);
+
+      if (run.error) {
         return {
           parser_mode: 'dwg_binary_failed',
           feature_collection: null as Record<string, unknown> | null,
           error: 'raw_dwg_parser_execution_failed',
           dwg_version: dwgVersion,
-          tool_stderr: stderr
+          tool_stderr: `${run.error.message}\n${stderrCombined}`.trim().slice(0, 2000) || null
+        };
+      }
+
+      if (run.status !== 0) {
+        return {
+          parser_mode: 'dwg_binary_failed',
+          feature_collection: null as Record<string, unknown> | null,
+          error: 'raw_dwg_parser_execution_failed',
+          dwg_version: dwgVersion,
+          tool_stderr:
+            (stderrCombined || `dwgread 退出码 ${run.status ?? 'unknown'}`).slice(0, 2000) || null
         };
       }
 
@@ -631,29 +775,48 @@ export class NetworkWorkbenchService {
           feature_collection: null as Record<string, unknown> | null,
           error: 'raw_dwg_parser_did_not_emit_output',
           dwg_version: dwgVersion,
-          tool_stderr: null
+          tool_stderr: stderrCombined || null
         };
       }
 
-      let parsed: unknown;
-      try {
-        parsed = this.parseGeoJsonFileUtf8OrGb18030(outputPath);
-      } catch {
+      const readResult = this.parseDwgreadGeoJsonOutputFile(outputPath);
+      if (!readResult.ok) {
+        const detail = [
+          readResult.parse_error_message ? `JSON 解析：${readResult.parse_error_message}` : null,
+          `输出文件开头（截断）：${readResult.head_preview || '(空)'}`
+        ]
+          .filter(Boolean)
+          .join(' ');
         return {
           parser_mode: 'dwg_binary_failed',
           feature_collection: null as Record<string, unknown> | null,
           error: 'raw_dwg_parser_invalid_geojson',
           dwg_version: dwgVersion,
-          tool_stderr: null as string | null
+          tool_stderr: [stderrCombined || null, detail].filter(Boolean).join('\n').slice(0, 2000) || null
         };
       }
-      const object = this.asObject(parsed);
+
+      const { featureCollection, note: coerceNote } = this.coerceLibredwgOutputToFeatureCollection(readResult.parsed);
+      if (!featureCollection) {
+        const root = this.asObject(readResult.parsed);
+        const rootType = typeof root.type === 'string' ? root.type : Array.isArray(readResult.parsed) ? 'Array' : typeof readResult.parsed;
+        const detail = `GeoJSON 根节点 type=${rootType}，无法规范为 FeatureCollection。输出开头：${readResult.head_preview || '(空)'}`;
+        return {
+          parser_mode: 'dwg_binary_failed',
+          feature_collection: null as Record<string, unknown> | null,
+          error: 'raw_dwg_parser_invalid_geojson',
+          dwg_version: dwgVersion,
+          tool_stderr: [stderrCombined || null, detail, readResult.lenient_note, coerceNote].filter(Boolean).join('\n').slice(0, 2000) || null
+        };
+      }
+
+      const diagParts = [stderrCombined || null, readResult.lenient_note, coerceNote].filter(Boolean);
       return {
         parser_mode: 'dwg_libredwg_geojson',
-        feature_collection: object.type === 'FeatureCollection' ? object : null,
-        error: object.type === 'FeatureCollection' ? null : 'raw_dwg_parser_invalid_geojson',
+        feature_collection: featureCollection,
+        error: null,
         dwg_version: dwgVersion,
-        tool_stderr: null as string | null
+        tool_stderr: diagParts.length ? diagParts.join('\n').slice(0, 2000) : null
       };
     } catch {
       return {
@@ -717,31 +880,106 @@ export class NetworkWorkbenchService {
     };
   }
 
-  private parseJsonFile(filePath: string) {
-    return JSON.parse(fs.readFileSync(filePath, 'utf8')) as unknown;
+  private stripUtf8BomFromBuffer(buf: Buffer): Buffer {
+    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
+      return buf.subarray(3);
+    }
+    return buf;
   }
 
   /**
-   * dwgread 在 Windows 上可能按系统代码页写出 GeoJSON（常见 GB18030），按 UTF-8 读会整文件解析失败或图层名乱码。
-   * 先 UTF-8；JSON 语法失败再按 GB18030 解码后解析。
+   * JSON 字节流自适应解码：UTF-8 → GB18030 → GBK（与 dwgread / 国产 CAD 侧车常见输出一致）。
    */
+  private parseJsonBufferAdaptive(buf: Buffer): unknown {
+    const body = this.stripUtf8BomFromBuffer(buf);
+    const attempts: Array<{ label: string; text: string }> = [
+      { label: 'utf8', text: body.toString('utf8') },
+      { label: 'gb18030', text: iconv.decode(body, 'gb18030') },
+      { label: 'gbk', text: iconv.decode(body, 'gbk') }
+    ];
+    let lastErr: Error | null = null;
+    for (const { text } of attempts) {
+      try {
+        return JSON.parse(text) as unknown;
+      } catch (e) {
+        lastErr = e instanceof Error ? e : new Error(String(e));
+      }
+    }
+    throw lastErr ?? new Error('JSON parse failed for all encodings');
+  }
+
+  private parseJsonFile(filePath: string): unknown {
+    const buf = fs.readFileSync(filePath);
+    return this.parseJsonBufferAdaptive(buf);
+  }
+
+  /** GeoJSON / dwgread 输出：与 parseJsonFile 相同自适应策略 */
   private parseGeoJsonFileUtf8OrGb18030(filePath: string): unknown {
-    let buf: Buffer = fs.readFileSync(filePath);
-    if (buf.length >= 3 && buf[0] === 0xef && buf[1] === 0xbb && buf[2] === 0xbf) {
-      buf = buf.subarray(3);
-    }
-    let utf8Err: Error | null = null;
+    return this.parseJsonBufferAdaptive(fs.readFileSync(filePath));
+  }
+
+  /**
+   * 典型乱码：UTF-8 中文图层名被按 GB18030 解读（如「出水口及管网」→「鍑烘按鍙ｅ強绠＄綉」）。
+   * 将乱码串按 GB18030 编码回字节再按 UTF-8 解读可还原；真·GB18030 合法中文经此变换后 round-trip 不一致，不会误伤。
+   */
+  private fixCadLabelUtf8MisreadAsGb18030(raw: string): string {
+    const s = raw.trim();
+    if (!s) return raw;
     try {
-      return JSON.parse(buf.toString('utf8')) as unknown;
-    } catch (e) {
-      utf8Err = e instanceof Error ? e : new Error(String(e));
-    }
-    try {
-      const text = iconv.decode(buf, 'gb18030');
-      return JSON.parse(text) as unknown;
+      const buf = iconv.encode(s, 'gb18030');
+      const recovered = buf.toString('utf8');
+      if (!recovered || recovered === s) return raw;
+      if (recovered.includes('\uFFFD')) return raw;
+      if (!Buffer.from(recovered, 'utf8').equals(buf)) return raw;
+      return recovered;
     } catch {
-      throw utf8Err;
+      return raw;
     }
+  }
+
+  /**
+   * 入库/接口统一文本：CAD 乱码修复 + Unicode NFC（PostgreSQL jsonb 与前端均以 UTF-8 为准）。
+   */
+  private normalizeTextForWorkbenchStorage(raw: string): string {
+    const repaired = this.fixCadLabelUtf8MisreadAsGb18030(raw.trim());
+    try {
+      return repaired.normalize('NFC');
+    } catch {
+      return repaired;
+    }
+  }
+
+  private isPlainObject(value: unknown): value is Record<string, unknown> {
+    return typeof value === 'object' && value !== null && !Array.isArray(value) && Object.getPrototypeOf(value) === Object.prototype;
+  }
+
+  /** 深度规范化 JSON 语义树中的全部字符串（用于 source_meta、graph_draft 落库前） */
+  private deepNormalizeUnicodeStringsInJson<T>(value: T): T {
+    if (value === null || value === undefined) return value;
+    if (typeof value === 'string') return this.normalizeTextForWorkbenchStorage(value) as T;
+    if (Array.isArray(value)) return value.map((item) => this.deepNormalizeUnicodeStringsInJson(item)) as T;
+    if (this.isPlainObject(value)) {
+      const out: Record<string, unknown> = {};
+      for (const [k, v] of Object.entries(value)) {
+        out[k] = this.deepNormalizeUnicodeStringsInJson(v);
+      }
+      return out as T;
+    }
+    return value;
+  }
+
+  private readLayerNameFromFeatureProps(props: Record<string, unknown>): string | null {
+    const layerName = this.readString(props, [
+      'layer',
+      'Layer',
+      'layer_name',
+      'LayerName',
+      'cad_layer',
+      'group',
+      'category'
+    ]);
+    if (!layerName?.trim()) return null;
+    return this.normalizeTextForWorkbenchStorage(layerName);
   }
 
   private buildGraphPreview(graphDraft: WorkbenchGraphDraft | null) {
@@ -947,9 +1185,7 @@ export class NetworkWorkbenchService {
       const props = this.asObject(feature?.properties);
       const geometry = this.asObject(feature?.geometry);
       const geometryType = typeof geometry.type === 'string' ? geometry.type : '';
-      const layerName =
-        this.readString(props, ['layer', 'Layer', 'layer_name', 'LayerName', 'cad_layer', 'group', 'category']) ??
-        null;
+      const layerName = this.readLayerNameFromFeatureProps(props);
 
       if (geometryType === 'Point' || geometryType === 'Polygon') {
         const point = this.getFeatureRepresentativePoint(geometry);
@@ -979,9 +1215,7 @@ export class NetworkWorkbenchService {
       const props = this.asObject(feature?.properties);
       const geometry = this.asObject(feature?.geometry);
       const geometryType = typeof geometry.type === 'string' ? geometry.type : '';
-      const layerName =
-        this.readString(props, ['layer', 'Layer', 'layer_name', 'LayerName', 'cad_layer', 'group', 'category']) ??
-        null;
+      const layerName = this.readLayerNameFromFeatureProps(props);
 
       const lineEndpoints = this.getFeatureLineEndpoints(geometry);
       if (lineEndpoints) {
@@ -1150,7 +1384,7 @@ export class NetworkWorkbenchService {
       } else if (Array.isArray(object.layers)) {
         detectedLayers = (object.layers as unknown[])
           .filter((item): item is string => typeof item === 'string' && Boolean(item.trim()))
-          .map((item) => item.trim());
+          .map((item) => this.normalizeTextForWorkbenchStorage(item.trim()));
         normalizedLayerMapping = this.recommendLayerMapping(detectedLayers, {
           ...normalizedLayerMapping,
           ...this.asObject(object.layer_mapping)
@@ -1209,6 +1443,7 @@ export class NetworkWorkbenchService {
     }
 
     detectedLayers = detectedLayers.length > 0 ? detectedLayers : Object.values(normalizedLayerMapping).filter((item): item is string => Boolean(item));
+    detectedLayers = [...new Set(detectedLayers.map((s) => this.normalizeTextForWorkbenchStorage(s)))];
     normalizedLayerMapping = this.recommendLayerMapping(detectedLayers, normalizedLayerMapping);
     const preview = this.buildGraphPreview(graphDraft);
 
@@ -2751,9 +2986,17 @@ export class NetworkWorkbenchService {
     const networkModel = await this.resolveOrCreateNetworkModel(context.selected_project_id);
     const relationStrategy = input.relation_strategy?.trim() || 'pump_chain_auto';
     const sourceAnalysis = await this.resolveSourceImport(input, context);
-    const sourceMeta = {
-      ...this.buildNormalizedSourceMeta(input, context.selected_block_id),
-      ...this.buildSourceImportMeta(sourceAnalysis)
+    const textEncodingPolicy = {
+      charset: 'utf-8',
+      unicode_normal_form: 'NFC',
+      cad_label_mojibake: 'repair_utf8_bytes_read_as_gb18030_v1'
+    };
+    let effectiveSourceMeta: Record<string, unknown> = {
+      ...(this.deepNormalizeUnicodeStringsInJson({
+        ...this.buildNormalizedSourceMeta(input, context.selected_block_id),
+        ...this.buildSourceImportMeta(sourceAnalysis)
+      }) as Record<string, unknown>),
+      text_encoding_policy: textEncodingPolicy
     };
     const publish = input.publish !== false;
 
@@ -2768,7 +3011,6 @@ export class NetworkWorkbenchService {
           ? null
           : existingVersions.find((item) => !item.is_published) ?? null;
       let versionId = selectedVersion?.id ?? null;
-      let effectiveSourceMeta: Record<string, unknown> = sourceMeta;
 
       if (versionId) {
         await this.db.query(
@@ -2815,7 +3057,9 @@ export class NetworkWorkbenchService {
       }
 
       let graphGeneration: GraphMaterializationResult | null = null;
-      const explicitGraphDraft = sourceAnalysis.graph_draft;
+      const explicitGraphDraft = sourceAnalysis.graph_draft
+        ? (this.deepNormalizeUnicodeStringsInJson(sourceAnalysis.graph_draft) as WorkbenchGraphDraft)
+        : null;
 
       if (!versionId) {
         throw new BadRequestException('failed to resolve network model version');
@@ -2832,7 +3076,10 @@ export class NetworkWorkbenchService {
       }
 
       if (graphGeneration) {
-        effectiveSourceMeta = this.buildGraphSourceMeta(effectiveSourceMeta, graphGeneration);
+        effectiveSourceMeta = this.deepNormalizeUnicodeStringsInJson(
+          this.buildGraphSourceMeta(effectiveSourceMeta, graphGeneration)
+        ) as Record<string, unknown>;
+        effectiveSourceMeta = { ...effectiveSourceMeta, text_encoding_policy: textEncodingPolicy };
         await this.db.query(
           `
           update network_model_version
