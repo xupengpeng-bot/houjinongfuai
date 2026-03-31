@@ -919,22 +919,25 @@ export class NetworkWorkbenchService {
   }
 
   /**
-   * 典型乱码：UTF-8 中文图层名被按 GB18030 解读（如「出水口及管网」→「鍑烘按鍙ｅ強绠＄綉」）。
-   * 将乱码串按 GB18030 编码回字节再按 UTF-8 解读可还原；真·GB18030 合法中文经此变换后 round-trip 不一致，不会误伤。
+   * 典型乱码：UTF-8 中文图层名被按 GB18030/GBK 解读（如「出水口及管网」→「鍑烘按鍙ｅ強绠＄綉」）。
+   * 将乱码串按对应编码压回字节再按 UTF-8 解读可还原；真·本地中文经此变换后 round-trip 不一致，不会误伤。
    */
   private fixCadLabelUtf8MisreadAsGb18030(raw: string): string {
     const s = raw.trim();
     if (!s) return raw;
-    try {
-      const buf = iconv.encode(s, 'gb18030');
-      const recovered = buf.toString('utf8');
-      if (!recovered || recovered === s) return raw;
-      if (recovered.includes('\uFFFD')) return raw;
-      if (!Buffer.from(recovered, 'utf8').equals(buf)) return raw;
-      return recovered;
-    } catch {
-      return raw;
+    for (const enc of ['gb18030', 'gbk'] as const) {
+      try {
+        const buf = iconv.encode(s, enc);
+        const recovered = buf.toString('utf8');
+        if (!recovered || recovered === s) continue;
+        if (recovered.includes('\uFFFD')) continue;
+        if (!Buffer.from(recovered, 'utf8').equals(buf)) continue;
+        return recovered;
+      } catch {
+        continue;
+      }
     }
+    return raw;
   }
 
   /**
@@ -969,15 +972,25 @@ export class NetworkWorkbenchService {
   }
 
   private readLayerNameFromFeatureProps(props: Record<string, unknown>): string | null {
-    const layerName = this.readString(props, [
+    let layerName = this.readString(props, [
       'layer',
       'Layer',
+      'LAYER',
       'layer_name',
       'LayerName',
       'cad_layer',
       'group',
       'category'
     ]);
+    if (!layerName?.trim()) {
+      for (const [k, v] of Object.entries(props)) {
+        if (typeof v !== 'string' || !v.trim()) continue;
+        if (k.toLowerCase().includes('layer')) {
+          layerName = v.trim();
+          break;
+        }
+      }
+    }
     if (!layerName?.trim()) return null;
     return this.normalizeTextForWorkbenchStorage(layerName);
   }
