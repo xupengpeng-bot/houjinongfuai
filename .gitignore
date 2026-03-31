@@ -1,3 +1,6 @@
+# Local-only frontend path for start-frontend.ps1 (see frontend.local.example.json)
+frontend.local.json
+
 .web-test/
 backend/*.log
 *.err

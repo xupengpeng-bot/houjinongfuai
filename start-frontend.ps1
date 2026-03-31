@@ -9,14 +9,27 @@ $RootDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $WorkspaceParent = Split-Path $RootDir -Parent
 $LovableWorking = Join-Path $WorkspaceParent "lovable-working"
 $LovableLegacy = Join-Path $WorkspaceParent "lovable"
+$LocalFrontendConfig = Join-Path $RootDir "frontend.local.json"
 
 if ([string]::IsNullOrWhiteSpace($FrontendDir)) {
-  if (Test-Path (Join-Path $LovableWorking "package.json")) {
-    $FrontendDir = $LovableWorking
-  } elseif (Test-Path (Join-Path $LovableLegacy "package.json")) {
-    $FrontendDir = $LovableLegacy
-  } else {
-    $FrontendDir = $LovableWorking
+  if (Test-Path -LiteralPath $LocalFrontendConfig) {
+    try {
+      $cfg = Get-Content -LiteralPath $LocalFrontendConfig -Raw -Encoding UTF8 | ConvertFrom-Json
+      if ($cfg.frontendDir -and -not [string]::IsNullOrWhiteSpace([string]$cfg.frontendDir)) {
+        $FrontendDir = [System.IO.Path]::GetFullPath((Join-Path $RootDir $cfg.frontendDir.Trim()))
+      }
+    } catch {
+      Write-Warning "Ignoring frontend.local.json (parse error): $_"
+    }
+  }
+  if ([string]::IsNullOrWhiteSpace($FrontendDir)) {
+    if (Test-Path (Join-Path $LovableWorking "package.json")) {
+      $FrontendDir = $LovableWorking
+    } elseif (Test-Path (Join-Path $LovableLegacy "package.json")) {
+      $FrontendDir = $LovableLegacy
+    } else {
+      $FrontendDir = $LovableWorking
+    }
   }
 }
 
@@ -35,10 +48,12 @@ Frontend not found or missing package.json: $FrontendDir
 Fix one of:
   1) Clone/checkout the Vite app next to this repo, e.g.:
      $LovableWorking
-  2) Or pass an explicit path:
-     .\start-frontend.ps1 -FrontendDir 'D:\path\to\your-frontend'
+  2) Or pass an explicit path (any folder with package.json):
+     .\start-frontend.ps1 -FrontendDir 'C:\path\to\your-frontend'
+  3) Or add frontend.local.json (gitignored) next to this script — copy frontend.local.example.json
+     and set `"frontendDir`" to a path relative to the houjinongfuai repo root, e.g. `"../git-connect-9d2f5334`"
 
-Expected sibling folder names (under $WorkspaceParent): lovable-working (preferred) or lovable.
+Expected sibling folder names (under $WorkspaceParent) when not using -FrontendDir or frontend.local.json: lovable-working (preferred) or lovable.
 "@
 }
 
