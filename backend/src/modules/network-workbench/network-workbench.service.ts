@@ -79,8 +79,24 @@ type WorkbenchModelVersionSummary = {
 
 type WorkbenchGraphDraftNode = {
   node_code?: string;
+  node_name?: string | null;
   node_type?: string;
   asset_id?: string | null;
+  asset_ids?: string[];
+  device_ids?: string[];
+  node_params?: Record<string, string | number | null> | null;
+  pump_units?: Array<{
+    unit_code?: string;
+    unit_name?: string | null;
+    enabled?: boolean;
+    rated_flow_m3h?: number | string | null;
+    rated_head_m?: number | string | null;
+    rated_power_kw?: number | string | null;
+    asset_ids?: string[];
+    device_ids?: string[];
+  }>;
+  cad_x?: number | string | null;
+  cad_y?: number | string | null;
   latitude?: number | string | null;
   longitude?: number | string | null;
   altitude?: number | string | null;
@@ -184,6 +200,8 @@ type WorkbenchSourcePreviewResult = {
       to_node_code: string;
     }>;
   } | null;
+  /** 与 QGIS/Leaflet 类似：完整 GeoJSON 要素用于前端平面预览（图纸坐标系，非经纬度底图） */
+  display_geojson: Record<string, unknown> | null;
   readiness: {
     ready: boolean;
     blockers: string[];
@@ -409,13 +427,52 @@ export class NetworkWorkbenchService {
     return Number.isFinite(parsed) ? parsed : null;
   }
 
+  private normalizeStringArray(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim() : String(item ?? '').trim()))
+      .filter(Boolean);
+  }
+
+  private normalizeNodeParams(value: unknown) {
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null;
+    const entries = Object.entries(value as Record<string, unknown>).flatMap(([key, item]) => {
+      if (typeof item === 'string' || typeof item === 'number' || item === null) {
+        return [[key, item] as const];
+      }
+      return [];
+    });
+    return entries.length > 0 ? Object.fromEntries(entries) : null;
+  }
+
+  private normalizePumpUnits(value: unknown, nodeCode: string) {
+    if (!Array.isArray(value)) return [];
+    return value.map((item, index) => {
+      const unit = this.asObject(item);
+      return {
+        unit_code: this.sanitizeCode(unit.unit_code, `${nodeCode}-P${index + 1}`),
+        unit_name: typeof unit.unit_name === 'string' ? unit.unit_name.trim() || null : null,
+        enabled: typeof unit.enabled === 'boolean' ? unit.enabled : true,
+        rated_flow_m3h: this.toNullableNumber(unit.rated_flow_m3h),
+        rated_head_m: this.toNullableNumber(unit.rated_head_m),
+        rated_power_kw: this.toNullableNumber(unit.rated_power_kw),
+        asset_ids: this.normalizeStringArray(unit.asset_ids),
+        device_ids: this.normalizeStringArray(unit.device_ids)
+      };
+    });
+  }
+
   private sanitizeCode(value: unknown, fallback: string) {
     const text = typeof value === 'string' ? value.trim() : '';
     const normalized = text.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     return normalized || fallback;
   }
 
-  private buildGraphSourceMeta(sourceMeta: Record<string, unknown>, graphResult: GraphMaterializationResult): Record<string, unknown> {
+  private buildGraphSourceMeta(
+    sourceMeta: Record<string, unknown>,
+    graphResult: GraphMaterializationResult,
+    graphDraftSnapshot?: WorkbenchGraphDraft | null
+  ): Record<string, unknown> {
     return {
       ...sourceMeta,
       graph_source: graphResult.graph_source,
@@ -423,7 +480,12 @@ export class NetworkWorkbenchService {
       graph_pipe_count: graphResult.generated_pipe_count,
       graph_generated_at: new Date().toISOString(),
       graph_has_coordinates: graphResult.has_coordinates,
-      generated_from_relation_count: graphResult.generated_from_relation_count
+      generated_from_relation_count: graphResult.generated_from_relation_count,
+      ...(graphDraftSnapshot
+        ? {
+            graph_draft_snapshot: graphDraftSnapshot
+          }
+        : {})
     };
   }
 
@@ -995,6 +1057,95 @@ export class NetworkWorkbenchService {
     return this.normalizeTextForWorkbenchStorage(layerName);
   }
 
+  private simplifyRingCoords(ring: unknown[], maxPoints: number): unknown[] {
+    if (ring.length <= maxPoints) return ring;
+    const out: unknown[] = [];
+    const n = ring.length;
+    const step = (n - 1) / (maxPoints - 1);
+    for (let i = 0; i < maxPoints - 1; i += 1) {
+      out.push(ring[Math.min(n - 1, Math.floor(i * step))]);
+    }
+    out.push(ring[n - 1]);
+    return out;
+  }
+
+  private clampGeometryForDisplay(geom: Record<string, unknown>, maxLinePoints: number): Record<string, unknown> | null {
+    const t = typeof geom.type === 'string' ? geom.type : '';
+    if (t === 'Point' && Array.isArray(geom.coordinates)) {
+      return geom;
+    }
+    if (t === 'LineString' && Array.isArray(geom.coordinates)) {
+      return {
+        ...geom,
+        coordinates: this.simplifyRingCoords(geom.coordinates as unknown[], maxLinePoints)
+      };
+    }
+    if (t === 'MultiLineString' && Array.isArray(geom.coordinates)) {
+      const lines = geom.coordinates as unknown[][];
+      const first = lines[0];
+      if (!Array.isArray(first)) return null;
+      return {
+        ...geom,
+        coordinates: [this.simplifyRingCoords(first as unknown[], maxLinePoints)]
+      };
+    }
+    if (t === 'Polygon' && Array.isArray(geom.coordinates)) {
+      const rings = geom.coordinates as unknown[][];
+      const outer = rings[0];
+      if (!Array.isArray(outer)) return geom;
+      const nextRings = [this.simplifyRingCoords(outer as unknown[], maxLinePoints), ...rings.slice(1)];
+      return { ...geom, coordinates: nextRings };
+    }
+    if (t === 'MultiPolygon' && Array.isArray(geom.coordinates)) {
+      const polys = geom.coordinates as unknown[][][];
+      const first = polys[0];
+      if (!first?.[0]) return null;
+      return {
+        type: 'Polygon',
+        coordinates: [this.simplifyRingCoords(first[0] as unknown[], maxLinePoints), ...first.slice(1)]
+      };
+    }
+    return null;
+  }
+
+  /**
+   * 供前端 Leaflet CRS.Simple 按图纸坐标绘制全部要素；与 graph 草稿独立（草稿可能只含部分几何）。
+   */
+  private buildDisplayGeoJsonFromFeatureCollection(
+    fc: Record<string, unknown> | null,
+    opts: { maxFeatures: number; maxLinePoints: number }
+  ): Record<string, unknown> | null {
+    if (!fc || fc.type !== 'FeatureCollection' || !Array.isArray(fc.features)) {
+      return null;
+    }
+    const outFeatures: unknown[] = [];
+    const raw = fc.features as unknown[];
+    for (let i = 0; i < raw.length && outFeatures.length < opts.maxFeatures; i += 1) {
+      const feat = this.asObject(raw[i]);
+      const geom = this.asObject(feat.geometry);
+      const clamped = this.clampGeometryForDisplay(geom, opts.maxLinePoints);
+      if (!clamped) continue;
+      const props = this.asObject(feat.properties);
+      const layerNorm = this.readLayerNameFromFeatureProps(props) ?? 'DEFAULT';
+      outFeatures.push({
+        type: 'Feature',
+        id: feat.id,
+        properties: { ...props, layer: layerNorm },
+        geometry: clamped
+      });
+    }
+    if (outFeatures.length === 0) return null;
+    return {
+      type: 'FeatureCollection',
+      features: outFeatures,
+      display_meta: {
+        crs_note: 'planar_drawing_units',
+        feature_cap: opts.maxFeatures,
+        source: 'network_workbench_preview'
+      }
+    };
+  }
+
   private buildGraphPreview(graphDraft: WorkbenchGraphDraft | null) {
     if (!graphDraft) return null;
     const normalized = this.normalizeGraphDraft(graphDraft);
@@ -1326,6 +1477,7 @@ export class NetworkWorkbenchService {
           next_step: 'save_config'
         },
         graph_preview: preview,
+        display_geojson: null,
         graph_draft: explicitGraphDraft,
         readiness: {
           ready: Boolean(preview && preview.node_count > 0 && preview.pipe_count > 0),
@@ -1346,6 +1498,7 @@ export class NetworkWorkbenchService {
     let detectedLayers: string[] = [];
     let normalizedLayerMapping = this.normalizeLayerMapping(input.layer_mapping);
     let graphDraft: WorkbenchGraphDraft | null = null;
+    let sourceFeatureCollectionForDisplay: Record<string, unknown> | null = null;
 
     const parseJsonCandidate = (content: unknown, candidateKind: string) => {
       const object = this.asObject(content);
@@ -1387,6 +1540,7 @@ export class NetworkWorkbenchService {
 
       if (featureCollection) {
         parserMode = `${candidateKind}_feature_collection`;
+        sourceFeatureCollectionForDisplay = featureCollection as Record<string, unknown>;
         const mapped = this.buildGraphDraftFromFeatureCollection(featureCollection, normalizedLayerMapping);
         detectedLayers = mapped.detected_layers;
         normalizedLayerMapping = this.recommendLayerMapping(detectedLayers, {
@@ -1459,6 +1613,10 @@ export class NetworkWorkbenchService {
     detectedLayers = [...new Set(detectedLayers.map((s) => this.normalizeTextForWorkbenchStorage(s)))];
     normalizedLayerMapping = this.recommendLayerMapping(detectedLayers, normalizedLayerMapping);
     const preview = this.buildGraphPreview(graphDraft);
+    const displayGeoJson = this.buildDisplayGeoJsonFromFeatureCollection(sourceFeatureCollectionForDisplay, {
+      maxFeatures: 3500,
+      maxLinePoints: 400
+    });
 
     if (graphDraft && preview) {
       blockers.length = 0;
@@ -1494,6 +1652,7 @@ export class NetworkWorkbenchService {
         next_step: nextStep
       },
       graph_preview: preview,
+      display_geojson: displayGeoJson,
       graph_draft: graphDraft,
       readiness: {
         ready: blockers.length === 0,
@@ -1742,8 +1901,15 @@ export class NetworkWorkbenchService {
       ? draft!.nodes
           .map((item, index) => ({
             node_code: this.sanitizeCode(item.node_code, `node_${index + 1}`),
+            node_name: typeof item.node_name === 'string' ? item.node_name.trim() || null : null,
             node_type: this.sanitizeCode(item.node_type, 'junction').toLowerCase(),
             asset_id: item.asset_id ?? null,
+            asset_ids: this.normalizeStringArray(item.asset_ids),
+            device_ids: this.normalizeStringArray(item.device_ids),
+            node_params: this.normalizeNodeParams(item.node_params),
+            pump_units: this.normalizePumpUnits(item.pump_units, this.sanitizeCode(item.node_code, `node_${index + 1}`)),
+            cad_x: this.toNullableNumber(item.cad_x),
+            cad_y: this.toNullableNumber(item.cad_y),
             latitude: this.toNullableNumber(item.latitude),
             longitude: this.toNullableNumber(item.longitude),
             altitude: this.toNullableNumber(item.altitude)
@@ -3071,8 +3237,11 @@ export class NetworkWorkbenchService {
 
       let graphGeneration: GraphMaterializationResult | null = null;
       const explicitGraphDraft = sourceAnalysis.graph_draft
-        ? (this.deepNormalizeUnicodeStringsInJson(sourceAnalysis.graph_draft) as WorkbenchGraphDraft)
+        ? this.normalizeGraphDraft(
+            this.deepNormalizeUnicodeStringsInJson(sourceAnalysis.graph_draft) as WorkbenchGraphDraft
+          )
         : null;
+      let persistedGraphDraftSnapshot: WorkbenchGraphDraft | null = explicitGraphDraft;
 
       if (!versionId) {
         throw new BadRequestException('failed to resolve network model version');
@@ -3084,13 +3253,14 @@ export class NetworkWorkbenchService {
         const seedRows = await this.loadGraphSeedRows(context.selected_project_id, context.selected_block_id, client);
         if (seedRows.length > 0) {
           const autoGraphDraft = this.buildAutoGraphDraft(seedRows, context);
+          persistedGraphDraftSnapshot = this.normalizeGraphDraft(autoGraphDraft);
           graphGeneration = await this.materializeGraphForVersion(versionId, autoGraphDraft, seedRows.length, client);
         }
       }
 
       if (graphGeneration) {
         effectiveSourceMeta = this.deepNormalizeUnicodeStringsInJson(
-          this.buildGraphSourceMeta(effectiveSourceMeta, graphGeneration)
+          this.buildGraphSourceMeta(effectiveSourceMeta, graphGeneration, persistedGraphDraftSnapshot)
         ) as Record<string, unknown>;
         effectiveSourceMeta = { ...effectiveSourceMeta, text_encoding_policy: textEncodingPolicy };
         await this.db.query(
