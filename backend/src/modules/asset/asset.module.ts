@@ -13,6 +13,7 @@ import {
   Put,
   Query
 } from '@nestjs/common';
+import { ArchiveService } from '../../common/archive/archive.service';
 import { DatabaseService } from '../../common/db/database.service';
 import {
   ASSET_EFFECTIVE_LATITUDE_SQL,
@@ -150,6 +151,19 @@ interface UpdateAssetDto {
   location_source_strategy?: LocationSourceStrategy;
 }
 
+interface ArchiveAssetDto {
+  archive_reason?: string;
+  reason_text?: string | null;
+  trigger_type?: string;
+  source_module?: string;
+  source_action?: string;
+  ui_entry?: string | null;
+  request_id?: string | null;
+  batch_id?: string | null;
+  operator_id?: string | null;
+  operator_name?: string | null;
+}
+
 interface AssetTreeNode {
   id: string;
   asset_code: string;
@@ -208,7 +222,10 @@ function assetTypeLabel(value: AssetType): string {
 
 @Injectable()
 class AssetService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly archiveService: ArchiveService,
+  ) {}
 
   private async nextAssetCode(client?: Parameters<DatabaseService['query']>[2]) {
     const result = await this.db.query<{ value: string }>(
@@ -819,47 +836,94 @@ class AssetService {
   }
 
   async delete(id: string) {
-    await this.getById(id);
+    return this.archive(id, {
+      archive_reason: 'manual_remove',
+      reason_text: 'Archived from asset delete flow',
+      trigger_type: 'manual_delete',
+      source_module: 'asset',
+      source_action: 'DELETE /assets/:id',
+      ui_entry: 'asset.detail'
+    });
+  }
 
-    const childCount = await this.db.query<{ count: string }>(
-      `
-      select count(*)::text as count
-      from asset
-      where tenant_id = $1 and parent_asset_id = $2
-      `,
-      [TENANT_ID, id]
-    );
+  async archive(id: string, dto: ArchiveAssetDto = {}) {
+    const archiveMeta = await this.db.withTransaction(async (client) => {
+      const existing = await this.fetchById(id, client);
+      if (!existing) {
+        throw appException(HttpStatus.NOT_FOUND, 'TARGET_NOT_FOUND', 'Asset not found', { id });
+      }
 
-    if (Number(childCount.rows[0]?.count ?? 0) > 0) {
-      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while child assets still exist', {
-        id,
-        reason: 'HAS_CHILD_ASSETS'
-      });
-    }
+      const childCount = await this.db.query<{ count: string }>(
+        `
+        select count(*)::text as count
+        from asset
+        where tenant_id = $1 and parent_asset_id = $2
+        `,
+        [TENANT_ID, id],
+        client
+      );
 
-    const linkedMeteringPoints = await this.db.query<{ count: string }>(
-      `
-      select count(*)::text as count
-      from metering_point
-      where tenant_id = $1 and asset_id = $2
-      `,
-      [TENANT_ID, id]
-    );
+      if (Number(childCount.rows[0]?.count ?? 0) > 0) {
+        throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while child assets still exist', {
+          id,
+          reason: 'HAS_CHILD_ASSETS'
+        });
+      }
 
-    if (Number(linkedMeteringPoints.rows[0]?.count ?? 0) > 0) {
-      throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while metering points still reference it', {
-        id,
-        reason: 'HAS_METERING_POINTS'
-      });
-    }
+      const linkedMeteringPoints = await this.db.query<{ count: string }>(
+        `
+        select count(*)::text as count
+        from metering_point
+        where tenant_id = $1 and asset_id = $2
+        `,
+        [TENANT_ID, id],
+        client
+      );
 
-    await this.db.query(
-      `
-      delete from asset
-      where tenant_id = $1 and id = $2
-      `,
-      [TENANT_ID, id]
-    );
+      if (Number(linkedMeteringPoints.rows[0]?.count ?? 0) > 0) {
+        throw appException(HttpStatus.CONFLICT, 'DELETE_BLOCKED', 'Asset cannot be deleted while metering points still reference it', {
+          id,
+          reason: 'HAS_METERING_POINTS'
+        });
+      }
+
+      const archiveResult = await this.archiveService.archiveAsset(
+        {
+          tenantId: TENANT_ID,
+          originId: existing.id,
+          originCode: existing.asset_code,
+          entityName: existing.asset_name,
+          archiveReason: dto.archive_reason?.trim() || 'manual_remove',
+          reasonText: dto.reason_text?.trim() || 'Archived from asset delete flow',
+          triggerType: dto.trigger_type?.trim() || 'manual_delete',
+          sourceModule: dto.source_module?.trim() || 'asset',
+          sourceAction: dto.source_action?.trim() || 'DELETE /assets/:id',
+          uiEntry: dto.ui_entry?.trim() || 'asset.detail',
+          requestId: dto.request_id?.trim() || null,
+          batchId: dto.batch_id?.trim() || null,
+          operatorId: dto.operator_id?.trim() || null,
+          operatorName: dto.operator_name?.trim() || null,
+          snapshot: {
+            ...existing,
+            location_read_model: buildSpatialLocationReadModelAsset(existing)
+          }
+        },
+        client
+      );
+
+      await this.db.query(
+        `
+        delete from asset
+        where tenant_id = $1 and id = $2
+        `,
+        [TENANT_ID, id],
+        client
+      );
+
+      return archiveResult;
+    });
+
+    return { id, archive_id: archiveMeta.archiveId };
   }
 }
 
@@ -921,6 +985,11 @@ class AssetController {
   @HttpCode(HttpStatus.NO_CONTENT)
   async delete(@Param('id') id: string) {
     await this.service.delete(id);
+  }
+
+  @Post(':id/archive')
+  archive(@Param('id') id: string, @Body() dto: ArchiveAssetDto) {
+    return this.service.archive(id, dto);
   }
 }
 

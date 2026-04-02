@@ -1,4 +1,6 @@
 import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
+import { ArchiveService } from '../../common/archive/archive.service';
+import { DatabaseService } from '../../common/db/database.service';
 import {
   buildSpatialLocationReadModelDevice,
   resolveEffectiveLocation,
@@ -43,9 +45,32 @@ export interface UpdateLedgerDeviceBody {
   location_source_strategy?: string | null;
 }
 
+export interface ArchiveLedgerDeviceBody {
+  archive_reason?: string;
+  reason_text?: string | null;
+  trigger_type?: string;
+  source_module?: string;
+  source_action?: string;
+  ui_entry?: string | null;
+  request_id?: string | null;
+  batch_id?: string | null;
+  operator_id?: string | null;
+  operator_name?: string | null;
+}
+
+function buildReleasedArchivedDeviceCode(deviceCode: string, id: string): string {
+  const suffix = `-ARC-${id.replace(/-/g, '').slice(0, 8).toUpperCase()}`;
+  const base = (deviceCode || 'DEVICE').slice(0, Math.max(1, 64 - suffix.length));
+  return `${base}${suffix}`;
+}
+
 @Injectable()
 export class DeviceLedgerService {
-  constructor(private readonly repo: DeviceLedgerRepository) {}
+  constructor(
+    private readonly repo: DeviceLedgerRepository,
+    private readonly db: DatabaseService,
+    private readonly archiveService: ArchiveService,
+  ) {}
 
   private tenant(): string {
     return PHASE1_TENANT_ID;
@@ -174,9 +199,58 @@ export class DeviceLedgerService {
   }
 
   async remove(id: string) {
-    const ok = await this.repo.softArchive(this.tenant(), id);
-    if (!ok) throw new BadRequestException('device cannot be archived in current state');
-    return { id };
+    return this.archive(id, {
+      archive_reason: 'manual_remove',
+      reason_text: 'Archived from device ledger delete flow',
+      trigger_type: 'manual_delete',
+      source_module: 'device-ledger',
+      source_action: 'DELETE /devices/:id',
+      ui_entry: 'device_ledger.detail',
+    });
+  }
+
+  async archive(id: string, body: ArchiveLedgerDeviceBody = {}) {
+    const tenantId = this.tenant();
+    const existing = await this.repo.findById(tenantId, id);
+    if (!existing) throw new NotFoundException('device not found');
+
+    const releasedCode = buildReleasedArchivedDeviceCode(existing.device_code, existing.id);
+
+    const archiveMeta = await this.db.withTransaction(async (client) => {
+      const fresh = await this.repo.findById(tenantId, id, client);
+      if (!fresh) {
+        throw new NotFoundException('device not found');
+      }
+
+      const archiveResult = await this.archiveService.archiveDevice(
+        {
+          tenantId,
+          originId: fresh.id,
+          originCode: fresh.device_code,
+          entityName: fresh.device_name,
+          releasedCode,
+          archiveReason: body.archive_reason?.trim() || 'manual_remove',
+          reasonText: body.reason_text?.trim() || 'Archived from device ledger delete flow',
+          triggerType: body.trigger_type?.trim() || 'manual_delete',
+          sourceModule: body.source_module?.trim() || 'device-ledger',
+          sourceAction: body.source_action?.trim() || 'DELETE /devices/:id',
+          uiEntry: body.ui_entry?.trim() || 'device_ledger.detail',
+          requestId: body.request_id?.trim() || null,
+          batchId: body.batch_id?.trim() || null,
+          operatorId: body.operator_id?.trim() || null,
+          operatorName: body.operator_name?.trim() || null,
+          snapshot: this.enrichLocation(fresh),
+        },
+        client,
+      );
+
+      const ok = await this.repo.archiveAndRelease(tenantId, id, releasedCode, client);
+      if (!ok) throw new BadRequestException('device cannot be archived in current state');
+
+      return archiveResult;
+    });
+
+    return { id, archive_id: archiveMeta.archiveId };
   }
 
   /**

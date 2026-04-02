@@ -4,7 +4,7 @@ import * as fs from 'node:fs';
 import * as os from 'node:os';
 import * as path from 'node:path';
 import iconv from 'iconv-lite';
-import { BadRequestException, Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common';
 import { DatabaseService } from '../../common/db/database.service';
 import { DeviceGatewayMaintainerService } from '../device-gateway/device-gateway-maintainer.service';
 import { DeviceGatewayService } from '../device-gateway/device-gateway.service';
@@ -116,6 +116,18 @@ type WorkbenchGraphDraft = {
   overwrite_existing?: boolean;
   nodes?: WorkbenchGraphDraftNode[];
   pipes?: WorkbenchGraphDraftPipe[];
+};
+
+type DraftBoundDeviceRow = {
+  id: string;
+  device_code: string | null;
+  device_name: string | null;
+  asset_id: string | null;
+  asset_name: string | null;
+  asset_type: string | null;
+  type_code: string | null;
+  type_name: string | null;
+  lifecycle_state: string | null;
 };
 
 type GraphMaterializationResult = {
@@ -940,6 +952,28 @@ export class NetworkWorkbenchService {
       sidecar_manifest_ref: sidecarResolvedPath ? path.relative(process.cwd(), sidecarResolvedPath) : null,
       sidecar_resolved_path: sidecarResolvedPath
     };
+  }
+
+  private resolveDownloadableWorkbenchSource(sourceFileRef?: string | null) {
+    const fileInfo = this.resolveSourceFile(sourceFileRef);
+    const resolved = fileInfo.resolved_source_ref ? path.resolve(fileInfo.resolved_source_ref) : null;
+    const uploadRoot = path.resolve(this.getWorkbenchUploadRoot());
+    if (!resolved || !fileInfo.file_exists) {
+      throw new NotFoundException('source file not found');
+    }
+    const normalizedResolved = path.normalize(resolved);
+    const normalizedUploadRoot = path.normalize(uploadRoot + path.sep);
+    if (!normalizedResolved.startsWith(normalizedUploadRoot)) {
+      throw new BadRequestException('source file ref is outside of workbench upload root');
+    }
+    return {
+      absolute_path: normalizedResolved,
+      file_name: fileInfo.file_name ?? path.basename(normalizedResolved),
+    };
+  }
+
+  async downloadSourceFile(sourceFileRef?: string | null) {
+    return this.resolveDownloadableWorkbenchSource(sourceFileRef);
   }
 
   private stripUtf8BomFromBuffer(buf: Buffer): Buffer {
@@ -1896,6 +1930,391 @@ export class NetworkWorkbenchService {
     };
   }
 
+  private async loadPublishedGraphDraftSnapshot(projectId: string, client?: any): Promise<WorkbenchGraphDraft | null> {
+    const result = await this.db.query<{ graph_draft_snapshot: unknown }>(
+      `
+      select source_meta_json->'graph_draft_snapshot' as graph_draft_snapshot
+      from network_model_version nmv
+      join network_model nm on nm.id = nmv.network_model_id
+      where nm.project_id = $1::uuid
+        and nmv.is_published = true
+      order by nmv.published_at desc nulls last, nmv.created_at desc
+      limit 1
+      `,
+      [projectId],
+      client
+    );
+    const rawDraft = this.asObject(result.rows[0]?.graph_draft_snapshot);
+    if (!rawDraft) return null;
+    return this.normalizeGraphDraft(rawDraft as WorkbenchGraphDraft);
+  }
+
+  private dedupeDraftPipesByEdge(pipes: WorkbenchGraphDraftPipe[] | undefined | null) {
+    const unique = new Map<string, WorkbenchGraphDraftPipe>();
+    for (const pipe of pipes ?? []) {
+      const from = this.sanitizeCode(pipe.from_node_code, '');
+      const to = this.sanitizeCode(pipe.to_node_code, '');
+      if (!from || !to) continue;
+      const key = `${from}->${to}`;
+      if (!unique.has(key)) {
+        unique.set(key, {
+          ...pipe,
+          from_node_code: from,
+          to_node_code: to
+        });
+      }
+    }
+    return [...unique.values()];
+  }
+
+  private scoreDraftDeviceRole(device: DraftBoundDeviceRow, expectedRole: 'well' | 'pump' | 'valve') {
+    const haystack = [
+      device.type_code,
+      device.type_name,
+      device.device_name,
+      device.asset_type,
+      device.asset_name
+    ]
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    const hasAny = (...candidates: string[]) => candidates.some((candidate) => haystack.includes(candidate));
+    const roleSignals = {
+      well: hasAny('well', '井'),
+      pump: hasAny('pump', '泵'),
+      valve: hasAny('valve', '阀')
+    };
+    const sensorSignals = hasAny('meter', 'collector', 'sensor', 'flow', 'pressure', '水表', '采集', '传感');
+
+    let score = 0;
+    if (roleSignals[expectedRole]) score += 100;
+    if (expectedRole === 'well' && device.asset_type === 'well') score += 40;
+    if (expectedRole === 'pump' && (device.asset_type === 'pump' || device.asset_type === 'pump_station')) score += 40;
+    if (expectedRole === 'valve' && (device.asset_type === 'valve' || device.asset_type === 'valve_group')) score += 40;
+    if (sensorSignals) score -= 60;
+
+    for (const otherRole of ['well', 'pump', 'valve'] as const) {
+      if (otherRole !== expectedRole && roleSignals[otherRole]) {
+        score -= 30;
+      }
+    }
+
+    return score;
+  }
+
+  private pickDraftNodeDeviceByRole(
+    node: WorkbenchGraphDraftNode,
+    devicesById: Map<string, DraftBoundDeviceRow>,
+    expectedRole: 'well' | 'pump' | 'valve'
+  ) {
+    const candidates = (node.device_ids ?? [])
+      .map((deviceId) => devicesById.get(deviceId))
+      .filter((device): device is DraftBoundDeviceRow => Boolean(device))
+      .map((device) => ({
+        device,
+        score: this.scoreDraftDeviceRole(device, expectedRole)
+      }))
+      .sort((a, b) => b.score - a.score);
+
+    return candidates[0]?.score > 0 ? candidates[0].device : null;
+  }
+
+  private buildScopedDraftCode(prefix: 'WELL' | 'PUMP' | 'VALVE', nodeCode: string, deviceId: string) {
+    return this.sanitizeCode(`${prefix}-${nodeCode}-${deviceId.slice(-6)}`.toUpperCase(), `${prefix}-${deviceId.slice(-6)}`);
+  }
+
+  private async ensureScopedPumpValveRelationsFromDraft(projectId: string, blockId: string, client: any): Promise<void> {
+    const draft = await this.loadPublishedGraphDraftSnapshot(projectId, client);
+    if (!draft?.nodes?.length) return;
+
+    const nodesByCode = new Map(
+      (draft.nodes ?? []).map((node) => [this.sanitizeCode(node.node_code, ''), node] as const).filter(([code]) => Boolean(code))
+    );
+    const outgoing = new Map<string, Set<string>>();
+    for (const pipe of this.dedupeDraftPipesByEdge(draft.pipes)) {
+      const from = pipe.from_node_code ? this.sanitizeCode(pipe.from_node_code, '') : '';
+      const to = pipe.to_node_code ? this.sanitizeCode(pipe.to_node_code, '') : '';
+      if (!from || !to) continue;
+      if (!outgoing.has(from)) outgoing.set(from, new Set());
+      outgoing.get(from)!.add(to);
+    }
+
+    const deviceIds = [...new Set((draft.nodes ?? []).flatMap((node) => this.normalizeStringArray(node.device_ids)))];
+    if (deviceIds.length === 0) return;
+
+    const deviceRows = await this.db.query<DraftBoundDeviceRow>(
+      `
+      select
+        d.id::text as id,
+        d.device_code,
+        d.device_name,
+        d.asset_id::text as asset_id,
+        a.asset_name,
+        a.asset_type,
+        dt.type_code,
+        dt.type_name,
+        d.lifecycle_state
+      from device d
+      left join asset a on a.id = d.asset_id
+      left join device_type dt on dt.id = d.device_type_id
+      where d.id = any($1::uuid[])
+      `,
+      [deviceIds],
+      client
+    );
+    const devicesById = new Map(deviceRows.rows.map((row) => [row.id, row] as const));
+
+    const existingWells = await this.db.query<{ id: string; device_id: string | null; block_id: string | null }>(
+      `select id::text as id, device_id::text as device_id, block_id::text as block_id from well where tenant_id = $1 and device_id = any($2::uuid[])`,
+      [TENANT_ID, deviceIds],
+      client
+    );
+    const wellByDeviceId = new Map(
+      existingWells.rows
+        .filter((row): row is { id: string; device_id: string; block_id: string | null } => Boolean(row.device_id))
+        .map((row) => [row.device_id, row] as const)
+    );
+
+    const existingPumps = await this.db.query<{ id: string; device_id: string | null; well_id: string | null }>(
+      `select id::text as id, device_id::text as device_id, well_id::text as well_id from pump where tenant_id = $1 and device_id = any($2::uuid[])`,
+      [TENANT_ID, deviceIds],
+      client
+    );
+    const pumpByDeviceId = new Map(
+      existingPumps.rows
+        .filter((row): row is { id: string; device_id: string; well_id: string | null } => Boolean(row.device_id))
+        .map((row) => [row.device_id, row] as const)
+    );
+
+    const existingValves = await this.db.query<{ id: string; device_id: string | null; well_id: string | null }>(
+      `select id::text as id, device_id::text as device_id, well_id::text as well_id from valve where tenant_id = $1 and device_id = any($2::uuid[])`,
+      [TENANT_ID, deviceIds],
+      client
+    );
+    const valveByDeviceId = new Map(
+      existingValves.rows
+        .filter((row): row is { id: string; device_id: string; well_id: string | null } => Boolean(row.device_id))
+        .map((row) => [row.device_id, row] as const)
+    );
+
+    for (const [wellNodeCode, wellNode] of nodesByCode.entries()) {
+      if (this.sanitizeCode(wellNode.node_type, '').toLowerCase() !== 'well') continue;
+
+      for (const pumpNodeCode of [...(outgoing.get(wellNodeCode) ?? [])]) {
+        const pumpNode = nodesByCode.get(pumpNodeCode);
+        if (!pumpNode || this.sanitizeCode(pumpNode.node_type, '').toLowerCase() !== 'pump') continue;
+
+        for (const valveNodeCode of [...(outgoing.get(pumpNodeCode) ?? [])]) {
+          const valveNode = nodesByCode.get(valveNodeCode);
+          if (!valveNode || this.sanitizeCode(valveNode.node_type, '').toLowerCase() !== 'valve') continue;
+
+          const wellDevice = this.pickDraftNodeDeviceByRole(wellNode, devicesById, 'well');
+          const pumpDevice = this.pickDraftNodeDeviceByRole(pumpNode, devicesById, 'pump');
+          const valveDevice = this.pickDraftNodeDeviceByRole(valveNode, devicesById, 'valve');
+          if (!wellDevice || !pumpDevice || !valveDevice) continue;
+
+          let wellId = wellByDeviceId.get(wellDevice.id)?.id ?? null;
+          if (wellId) {
+            await this.db.query(
+              `
+              update well
+              set block_id = $3::uuid,
+                  rated_flow = coalesce($4, rated_flow),
+                  rated_pressure = coalesce($5, rated_pressure),
+                  safety_profile_json = coalesce(safety_profile_json, '{}'::jsonb) || $6::jsonb,
+                  updated_at = now()
+              where tenant_id = $1 and id = $2::uuid
+              `,
+              [
+                TENANT_ID,
+                wellId,
+                blockId,
+                this.toNullableNumber(wellNode.node_params?.design_flow_m3h),
+                this.toNullableNumber(wellNode.node_params?.pump_head_m),
+                JSON.stringify({
+                  source: 'network_workbench_graph_bridge',
+                  displayName: wellNode.node_name ?? wellDevice.asset_name ?? wellDevice.device_name ?? wellNodeCode,
+                  nodeCode: wellNodeCode
+                })
+              ],
+              client
+            );
+          } else {
+            const insertedWell = await this.db.query<{ id: string }>(
+              `
+              insert into well (
+                tenant_id,
+                device_id,
+                block_id,
+                well_code,
+                water_source_type,
+                rated_flow,
+                rated_pressure,
+                safety_profile_json
+              )
+              values ($1, $2::uuid, $3::uuid, $4, 'groundwater', $5, $6, $7::jsonb)
+              returning id
+              `,
+              [
+                TENANT_ID,
+                wellDevice.id,
+                blockId,
+                this.buildScopedDraftCode('WELL', wellNodeCode, wellDevice.id),
+                this.toNullableNumber(wellNode.node_params?.design_flow_m3h),
+                this.toNullableNumber(wellNode.node_params?.pump_head_m),
+                JSON.stringify({
+                  source: 'network_workbench_graph_bridge',
+                  displayName: wellNode.node_name ?? wellDevice.asset_name ?? wellDevice.device_name ?? wellNodeCode,
+                  nodeCode: wellNodeCode
+                })
+              ],
+              client
+            );
+            wellId = insertedWell.rows[0].id;
+            wellByDeviceId.set(wellDevice.id, { id: wellId, device_id: wellDevice.id, block_id: blockId });
+          }
+
+          if (!wellId) continue;
+
+          let pumpId = pumpByDeviceId.get(pumpDevice.id)?.id ?? null;
+          if (pumpId) {
+            await this.db.query(
+              `
+              update pump
+              set well_id = $3::uuid,
+                  rated_power_kw = coalesce($4, rated_power_kw),
+                  updated_at = now()
+              where tenant_id = $1 and id = $2::uuid
+              `,
+              [TENANT_ID, pumpId, wellId, this.toNullableNumber(pumpNode.node_params?.rated_power_kw)],
+              client
+            );
+          } else {
+            const insertedPump = await this.db.query<{ id: string }>(
+              `
+              insert into pump (tenant_id, device_id, well_id, pump_code, rated_power_kw)
+              values ($1, $2::uuid, $3::uuid, $4, $5)
+              returning id
+              `,
+              [
+                TENANT_ID,
+                pumpDevice.id,
+                wellId,
+                this.buildScopedDraftCode('PUMP', pumpNodeCode, pumpDevice.id),
+                this.toNullableNumber(pumpNode.node_params?.rated_power_kw)
+              ],
+              client
+            );
+            pumpId = insertedPump.rows[0].id;
+            pumpByDeviceId.set(pumpDevice.id, { id: pumpId, device_id: pumpDevice.id, well_id: wellId });
+          }
+
+          let valveId = valveByDeviceId.get(valveDevice.id)?.id ?? null;
+          if (valveId) {
+            await this.db.query(
+              `
+              update valve
+              set well_id = $3::uuid,
+                  valve_kind = coalesce($4, valve_kind),
+                  updated_at = now()
+              where tenant_id = $1 and id = $2::uuid
+              `,
+              [
+                TENANT_ID,
+                valveId,
+                wellId,
+                typeof valveNode.node_params?.valve_mode === 'string' && valveNode.node_params.valve_mode.trim()
+                  ? valveNode.node_params.valve_mode.trim()
+                  : null
+              ],
+              client
+            );
+          } else {
+            const insertedValve = await this.db.query<{ id: string }>(
+              `
+              insert into valve (tenant_id, device_id, well_id, valve_code, valve_kind)
+              values ($1, $2::uuid, $3::uuid, $4, $5)
+              returning id
+              `,
+              [
+                TENANT_ID,
+                valveDevice.id,
+                wellId,
+                this.buildScopedDraftCode('VALVE', valveNodeCode, valveDevice.id),
+                typeof valveNode.node_params?.valve_mode === 'string' && valveNode.node_params.valve_mode.trim()
+                  ? valveNode.node_params.valve_mode.trim()
+                  : 'solenoid'
+              ],
+              client
+            );
+            valveId = insertedValve.rows[0].id;
+            valveByDeviceId.set(valveDevice.id, { id: valveId, device_id: valveDevice.id, well_id: wellId });
+          }
+
+          if (!pumpId || !valveId) continue;
+
+          const existingRelation = await this.db.query<{ id: string }>(
+            `
+            select id
+            from pump_valve_relation
+            where tenant_id = $1
+              and well_id = $2::uuid
+              and pump_id = $3::uuid
+              and valve_id = $4::uuid
+            limit 1
+            `,
+            [TENANT_ID, wellId, pumpId, valveId],
+            client
+          );
+
+          const relationConfig = {
+            sequence: 'valve_first',
+            valveDelaySeconds: 0,
+            pumpDelaySeconds: 0,
+            source: 'network_workbench_graph_bridge',
+            well_node_code: wellNodeCode,
+            pump_node_code: pumpNodeCode,
+            valve_node_code: valveNodeCode
+          };
+
+          if (existingRelation.rows[0]) {
+            await this.db.query(
+              `
+              update pump_valve_relation
+              set status = 'active',
+                  relation_config_json = coalesce(relation_config_json, '{}'::jsonb) || $3::jsonb,
+                  updated_at = now()
+              where tenant_id = $1 and id = $2::uuid
+              `,
+              [TENANT_ID, existingRelation.rows[0].id, JSON.stringify(relationConfig)],
+              client
+            );
+          } else {
+            await this.db.query(
+              `
+              insert into pump_valve_relation (
+                tenant_id,
+                well_id,
+                pump_id,
+                valve_id,
+                relation_role,
+                billing_inherit_mode,
+                relation_config_json,
+                status,
+                topology_relation_type_state
+              )
+              values ($1, $2::uuid, $3::uuid, $4::uuid, 'primary', 'well_policy', $5::jsonb, 'active', '{}'::jsonb)
+              `,
+              [TENANT_ID, wellId, pumpId, valveId, JSON.stringify(relationConfig)],
+              client
+            );
+          }
+        }
+      }
+    }
+  }
+
   private normalizeGraphDraft(draft: WorkbenchGraphDraft | undefined | null) {
     const nodes = Array.isArray(draft?.nodes)
       ? draft!.nodes
@@ -2541,7 +2960,7 @@ export class NetworkWorkbenchService {
     };
   }
 
-  async loadPumpValveRelations(projectId: string | null, blockId: string | null) {
+  async loadPumpValveRelations(projectId: string | null, blockId: string | null, client?: any) {
     const params: unknown[] = [TENANT_ID];
     const filters: string[] = [];
     if (projectId) {
@@ -2580,7 +2999,8 @@ export class NetworkWorkbenchService {
       order by pvr.created_at asc
       limit 50
       `,
-      params
+      params,
+      client
     );
     return result.rows;
   }
@@ -3050,11 +3470,16 @@ export class NetworkWorkbenchService {
     blockId?: string,
     generationStrategy = 'pump_chain_auto'
   ): Promise<RelationGenerationResult> {
-    const pumpValveRelations = await this.loadPumpValveRelations(projectId ?? null, blockId ?? null);
+    let pumpValveRelations = await this.loadPumpValveRelations(projectId ?? null, blockId ?? null);
     const createdRelationIds: string[] = [];
     const updatedRelationIds: string[] = [];
 
     await this.db.withTransaction(async (client) => {
+      if (pumpValveRelations.length === 0 && projectId && blockId) {
+        await this.ensureScopedPumpValveRelationsFromDraft(projectId, blockId, client);
+        pumpValveRelations = await this.loadPumpValveRelations(projectId, blockId, client);
+      }
+
       for (const relation of pumpValveRelations as any[]) {
         for (const item of [
           {

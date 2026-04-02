@@ -1,4 +1,5 @@
 import { Injectable } from '@nestjs/common';
+import type { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
 
 export const PHASE1_TENANT_ID = '00000000-0000-0000-0000-000000000001';
@@ -150,11 +151,12 @@ export class DeviceLedgerRepository {
     return { items: result.rows, total };
   }
 
-  async findById(tenantId: string, id: string): Promise<LedgerDeviceRow | null> {
+  async findById(tenantId: string, id: string, client?: PoolClient): Promise<LedgerDeviceRow | null> {
     const result = await this.db.query<LedgerDeviceRow>(
       `${this.baseSelect()}
        where d.tenant_id = $1 and d.id = $2 and d.lifecycle_state <> 'archived'`,
-      [tenantId, id]
+      [tenantId, id],
+      client,
     );
     return result.rows[0] ?? null;
   }
@@ -283,16 +285,32 @@ export class DeviceLedgerRepository {
     return r.rowCount !== null && r.rowCount > 0;
   }
 
-  /** Soft-delete: archive any non-archived device (draft, active, etc.). */
-  async softArchive(tenantId: string, id: string): Promise<boolean> {
+  /**
+   * Archive device in-place while releasing online business constraints:
+   * - lifecycle_state := archived
+   * - device_code / serial_no rewritten to a tombstone code
+   * - asset_id nulled so archived rows stop blocking asset cleanup
+   */
+  async archiveAndRelease(tenantId: string, id: string, releasedCode: string, client?: PoolClient): Promise<boolean> {
     const r = await this.db.query(
       `
       update device
-      set lifecycle_state = 'archived', updated_at = now()
+      set
+        lifecycle_state = 'archived',
+        device_code = $3,
+        serial_no = $3,
+        asset_id = null,
+        updated_at = now(),
+        ext_json = coalesce(ext_json, '{}'::jsonb) || jsonb_build_object(
+          'archive_origin_device_code', device_code,
+          'archive_released_code', $3,
+          'archived_at', to_char(now() at time zone 'UTC', 'YYYY-MM-DD"T"HH24:MI:SS.MS"Z"')
+        )
       where tenant_id = $1 and id = $2
         and lifecycle_state <> 'archived'
       `,
-      [tenantId, id]
+      [tenantId, id, releasedCode],
+      client,
     );
     return (r.rowCount ?? 0) > 0;
   }

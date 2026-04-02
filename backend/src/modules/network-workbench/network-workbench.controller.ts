@@ -1,5 +1,8 @@
-import { Body, Controller, Get, Post, Query, UploadedFiles, UseInterceptors } from '@nestjs/common';
+import { Body, Controller, Get, Post, Query, Res, StreamableFile, UploadedFiles, UseInterceptors } from '@nestjs/common';
 import { FileFieldsInterceptor } from '@nestjs/platform-express';
+import * as fs from 'fs';
+import * as path from 'path';
+import type { Response } from 'express';
 import { ok } from '../../common/http/api-response';
 import { NetworkWorkbenchService } from './network-workbench.service';
 
@@ -53,6 +56,19 @@ export class NetworkWorkbenchController {
   @Get('network-workbench/handoff-package')
   async handoffPackage(@Query('project_id') projectId?: string, @Query('block_id') blockId?: string) {
     return ok(await this.service.getHandoffPackage(projectId, blockId));
+  }
+
+  @Get('network-workbench/source-file')
+  async sourceFile(
+    @Query('source_file_ref') sourceFileRef?: string,
+    @Res({ passthrough: true }) res?: Response
+  ) {
+    const file = await this.service.downloadSourceFile(sourceFileRef);
+    const ext = path.extname(file.file_name).toLowerCase();
+    const mimeType = ext === '.dxf' ? 'application/dxf' : 'application/octet-stream';
+    res?.setHeader('Content-Type', mimeType);
+    res?.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.file_name)}`);
+    return new StreamableFile(fs.createReadStream(file.absolute_path));
   }
 
   @Post('network-workbench/upload-source')

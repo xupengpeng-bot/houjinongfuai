@@ -2,6 +2,7 @@ import { Body, Controller, Delete, Get, Module, Param, Post, Put, Query } from '
 import { ok } from '../../common/http/api-response';
 import { SPATIAL_LOCATION_LAYERS_CONTRACT_V1 } from '../../common/location/spatial-location-semantics';
 import {
+  ArchiveLedgerDeviceDto,
   CreateLedgerDeviceDto,
   ListDevicesQueryDto,
   UpdateLedgerDeviceDto
@@ -78,6 +79,11 @@ class DeviceLedgerController {
   @Delete(':id')
   async remove(@Param('id') id: string) {
     return ok(await this.service.remove(id));
+  }
+
+  @Post(':id/archive')
+  async archive(@Param('id') id: string, @Body() dto: ArchiveLedgerDeviceDto) {
+    return ok(await this.service.archive(id, dto));
   }
 }
 

@@ -111,3 +111,45 @@ export class UpdateLedgerDeviceDto {
   @IsString()
   location_source_strategy?: string | null;
 }
+
+export class ArchiveLedgerDeviceDto {
+  @IsOptional()
+  @IsString()
+  archive_reason?: string;
+
+  @IsOptional()
+  @IsString()
+  reason_text?: string | null;
+
+  @IsOptional()
+  @IsString()
+  trigger_type?: string;
+
+  @IsOptional()
+  @IsString()
+  source_module?: string;
+
+  @IsOptional()
+  @IsString()
+  source_action?: string;
+
+  @IsOptional()
+  @IsString()
+  ui_entry?: string | null;
+
+  @IsOptional()
+  @IsString()
+  request_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  batch_id?: string | null;
+
+  @IsOptional()
+  @Matches(UUID_LIKE_PATTERN)
+  operator_id?: string | null;
+
+  @IsOptional()
+  @IsString()
+  operator_name?: string | null;
+}

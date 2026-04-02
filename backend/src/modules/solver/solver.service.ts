@@ -994,29 +994,44 @@ export class SolverService {
 
   async preview(dto: SolverPreviewRequestDto) {
     const readModel = await this.buildReadModel(dto);
+    const planBundle = this.buildPlanBundle(readModel, dto.constraints);
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
       notes: 'solver kernel not implemented; envelope only — graph bound to published network_model_version',
       readModel,
       result: {
-        feasible: true,
-        horizonMinutes: null as number | null,
-        units: [] as unknown[]
+        feasible: planBundle.feasible,
+        dispatchable: planBundle.dispatchable,
+        horizonMinutes: planBundle.horizonMinutes,
+        summary: planBundle.summary,
+        selected_plan_id: planBundle.selected_plan_id,
+        units: planBundle.units,
+        plans: planBundle.plans,
+        explanations: planBundle.explanations
       }
     };
   }
 
   async plan(dto: SolverPlanRequestDto) {
     const readModel = await this.buildReadModel(dto);
+    const planBundle = this.buildPlanBundle(readModel, dto.constraints, dto.objective);
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
       notes: 'solver kernel not implemented; envelope only — graph bound to published network_model_version',
       readModel,
       result: {
-        planId: null as string | null,
-        steps: [] as unknown[]
+        feasible: planBundle.feasible,
+        dispatchable: planBundle.dispatchable,
+        objective: planBundle.objective,
+        horizonMinutes: planBundle.horizonMinutes,
+        summary: planBundle.summary,
+        selected_plan_id: planBundle.selected_plan_id,
+        steps: planBundle.steps,
+        units: planBundle.units,
+        plans: planBundle.plans,
+        explanations: planBundle.explanations
       }
     };
   }
