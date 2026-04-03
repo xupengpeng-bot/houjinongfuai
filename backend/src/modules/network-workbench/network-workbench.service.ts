@@ -109,6 +109,11 @@ type WorkbenchGraphDraftPipe = {
   to_node_code?: string;
   length_m?: number | string | null;
   diameter_mm?: number | string | null;
+  geometry_points?: Array<{
+    x?: number | string | null;
+    y?: number | string | null;
+    z?: number | string | null;
+  }>;
 };
 
 type WorkbenchGraphDraft = {
@@ -472,6 +477,21 @@ export class NetworkWorkbenchService {
         device_ids: this.normalizeStringArray(unit.device_ids)
       };
     });
+  }
+
+  private normalizePipeGeometryPoints(value: unknown) {
+    if (!Array.isArray(value)) return undefined;
+    const points = value
+      .map((item) => {
+        const point = this.asObject(item);
+        const x = this.toNullableNumber(point.x);
+        const y = this.toNullableNumber(point.y);
+        const z = this.toNullableNumber(point.z);
+        if (x === null || y === null) return null;
+        return { x, y, z };
+      })
+      .filter((item): item is { x: number; y: number; z: number | null } => item !== null);
+    return points.length >= 2 ? points : undefined;
   }
 
   private sanitizeCode(value: unknown, fallback: string) {
@@ -2346,12 +2366,21 @@ export class NetworkWorkbenchService {
             from_node_code: this.sanitizeCode(item.from_node_code, ''),
             to_node_code: this.sanitizeCode(item.to_node_code, ''),
             length_m: this.toNullableNumber(item.length_m),
-            diameter_mm: this.toNullableNumber(item.diameter_mm)
+            diameter_mm: this.toNullableNumber(item.diameter_mm),
+            geometry_points: this.normalizePipeGeometryPoints(item.geometry_points)
           }))
           .filter((item) => Boolean(item.from_node_code && item.to_node_code))
       : [];
 
+    const dedupedPipes = new Map<string, (typeof pipes)[number]>();
     for (const pipe of pipes) {
+      const edgeKey = `${pipe.from_node_code}->${pipe.to_node_code}:${pipe.pipe_type || 'main'}`;
+      if (!dedupedPipes.has(edgeKey)) {
+        dedupedPipes.set(edgeKey, pipe);
+      }
+    }
+
+    for (const pipe of dedupedPipes.values()) {
       if (!nodeCodes.has(pipe.from_node_code) || !nodeCodes.has(pipe.to_node_code)) {
         throw new BadRequestException(`graph_draft pipe ${pipe.pipe_code} references unknown node_code`);
       }
@@ -2361,7 +2390,7 @@ export class NetworkWorkbenchService {
       import_mode: draft?.import_mode?.trim() || 'manual_graph_draft',
       overwrite_existing: draft?.overwrite_existing !== false,
       nodes,
-      pipes
+      pipes: [...dedupedPipes.values()]
     };
   }
 
