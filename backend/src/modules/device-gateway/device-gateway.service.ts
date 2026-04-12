@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { ModuleRef } from '@nestjs/core';
 import { randomUUID } from 'crypto';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
@@ -8,13 +9,39 @@ import { ErrorCodes } from '../../common/errors/error-codes';
 import { DeviceEnvelope } from '../protocol-adapter/device-envelope';
 import { DeviceRuntimeEvent } from '../protocol-adapter/device-runtime-event';
 import { TcpJsonV1Adapter } from '../protocol-adapter/tcp-json-v1.adapter';
-import { FarmerFundService } from '../farmer-fund/farmer-fund.service';
 import { OrderRepository } from '../order/order.repository';
+import { OrderSettlementService } from '../order/order-settlement.service';
+import { RuntimeCheckoutService } from '../runtime/runtime-checkout.service';
 import { SessionStatusLogRepository } from '../runtime/session-status-log.repository';
+import { RuntimeIngestService } from '../runtime-ingest/runtime-ingest.service';
+import { isNonReplayableRealtimeActionCode } from './device-command-dispatch-policy';
+import { buildScanControllerTrialSpec } from './scan-controller-trial.contract';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const DEFAULT_MANAGER_ID = '00000000-0000-0000-0000-000000000102';
 const DEFAULT_OPERATOR_ID = '00000000-0000-0000-0000-000000000103';
+const SUPPORTED_PLATFORM_QUERY_CODES = new Set([
+  'query_common_status',
+  'query_workflow_state',
+  'query_electric_meter',
+  'query_upgrade_status',
+  'query_upgrade_capability',
+]);
+const SUPPORTED_PLATFORM_ACTION_CODES = new Set([
+  'start_pump',
+  'stop_pump',
+  'open_valve',
+  'close_valve',
+  'pause_session',
+  'resume_session',
+  'upgrade_firmware',
+  'ota_prepare',
+  'ota_start',
+  'ota_cancel',
+  'ota_commit',
+  'ota_rollback',
+  'play_voice_prompt',
+]);
 
 type ResolvedDevice = {
   id: string;
@@ -23,6 +50,9 @@ type ResolvedDevice = {
   deviceName: string | null;
   onlineState: string | null;
   runtimeState: string | null;
+  projectId: string | null;
+  blockId: string | null;
+  sourceNodeCode: string | null;
 };
 
 type ResolvedSession = {
@@ -39,6 +69,7 @@ type ResolvedCommandDispatch = {
   targetDeviceId: string;
   commandCode: string;
   dispatchStatus: string;
+  requestPayload: Record<string, unknown>;
 };
 
 type ResolvedDeviceCommand = {
@@ -62,10 +93,28 @@ type QueuedDeviceCommand = {
   imei: string;
   sessionId: string | null;
   sessionRef: string | null;
+  requestMsgId: string | null;
+  requestSeqNo: number | null;
   startToken: string | null;
   sentAt: string | null;
   ackedAt: string | null;
   requestPayload: Record<string, unknown>;
+};
+
+type RealtimeDispatchCandidate = {
+  id: string;
+  commandToken: string;
+  commandCode: string;
+  commandStatus: string;
+  targetDeviceId: string | null;
+  imei: string;
+  sessionId: string | null;
+  sessionRef: string | null;
+  requestMsgId: string | null;
+  requestSeqNo: number | null;
+  startToken: string | null;
+  requestPayload: Record<string, unknown>;
+  wireMessage: Record<string, unknown>;
 };
 
 type DeviceCommandQueueRow = {
@@ -101,6 +150,83 @@ type DeviceConnectionHealthRow = {
   secondsSinceHeartbeat: number | null;
 };
 
+type DeviceGatewayCommandRecord = {
+  id: string;
+  commandToken: string;
+  commandCode: string;
+  commandStatus: string;
+  imei: string;
+  targetDeviceId: string | null;
+  sessionId: string | null;
+  sessionRef: string | null;
+  requestMsgId: string | null;
+  requestSeqNo: number | null;
+  ackMsgId: string | null;
+  ackSeqNo: number | null;
+  sentAt: string | null;
+  ackedAt: string | null;
+  failedAt: string | null;
+  timeoutAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+  requestPayload: Record<string, unknown>;
+  responsePayload: Record<string, unknown>;
+  wireMessage?: Record<string, unknown>;
+  deviceCode: string | null;
+  deviceName: string | null;
+};
+
+type TcpAuditLogRecord = {
+  id: string;
+  transportType: string;
+  direction: string;
+  connectionId: string;
+  remoteAddr: string | null;
+  remotePort: number | null;
+  imei: string | null;
+  msgType: string | null;
+  protocolVersion: string | null;
+  frameSizeBytes: number;
+  parseStatus: string;
+  ingestStatus: string;
+  ingestError: string | null;
+  rawFrameText: string;
+  requestSnapshot: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DeviceInteractionLogRecord = {
+  source: 'v2' | 'legacy';
+  id: string;
+  tenantId: string;
+  deviceId: string | null;
+  imei: string;
+  deviceCode: string | null;
+  deviceName: string | null;
+  connectionId: string | null;
+  protocolVersion: string | null;
+  direction: string;
+  msgId: string | null;
+  seqNo: number | null;
+  msgType: string;
+  eventType: string | null;
+  sessionRef: string | null;
+  commandId: string | null;
+  commandToken: string | null;
+  commandCode: string | null;
+  commandStatus: string | null;
+  deviceTs: string | null;
+  serverRxTs: string;
+  integrityOk: boolean;
+  payloadSizeBytes: number;
+  payloadPreview: Record<string, unknown>;
+  payload: Record<string, unknown>;
+  rawBodyText: string | null;
+  rawBodyRef: string | null;
+  storageTier: string;
+};
+
 type ActiveRuntimeSession = {
   id: string;
   tenantId: string;
@@ -127,19 +253,103 @@ type GatewayRecoveryRecommendation = {
   stats: Record<string, unknown>;
 };
 
+type DispatchQueryInput = {
+  target_device_id?: string | null;
+  imei?: string | null;
+  session_id?: string | null;
+  session_ref?: string | null;
+  query_code?: string | null;
+  scope?: string | null;
+  module_code?: string | null;
+  module_instance_code?: string | null;
+  channel_code?: string | null;
+  metric_codes?: string[] | null;
+  payload?: Record<string, unknown> | null;
+  source?: string | null;
+};
+
+type DispatchExecuteActionInput = {
+  target_device_id?: string | null;
+  imei?: string | null;
+  session_id?: string | null;
+  session_ref?: string | null;
+  order_id?: string | null;
+  action_code?: string | null;
+  scope?: string | null;
+  module_code?: string | null;
+  module_instance_code?: string | null;
+  channel_code?: string | null;
+  payload?: Record<string, unknown> | null;
+  start_token?: string | null;
+  source?: string | null;
+};
+
+type DispatchSyncConfigInput = {
+  target_device_id?: string | null;
+  imei?: string | null;
+  session_id?: string | null;
+  session_ref?: string | null;
+  config_version?: number | null;
+  firmware_family?: string | null;
+  feature_modules?: string[] | null;
+  channel_bindings?: unknown[] | null;
+  runtime_rules?: Record<string, unknown> | null;
+  resource_inventory?: Record<string, unknown> | null;
+  payload?: Record<string, unknown> | null;
+  source?: string | null;
+};
+
+type CardSwipeBridgeResult = {
+  handled: boolean;
+  accepted: boolean;
+  action: string | null;
+  sessionId: string | null;
+  sessionRef: string | null;
+  orderId: string | null;
+  awaitingDeviceAck: boolean;
+  promptCode: string | null;
+  errorCode: string | null;
+  errorMessage: string | null;
+  queuedCommandCount: number;
+  responseSnapshot: Record<string, unknown>;
+};
+
 @Injectable()
 export class DeviceGatewayService {
+  private readonly transportEnvelopeKeys = new Set([
+    'v',
+    't',
+    'i',
+    'm',
+    's',
+    'c',
+    'r',
+    'p',
+    'ts',
+    'integrity'
+  ]);
+  private runtimeCheckoutService: RuntimeCheckoutService | null = null;
+
   constructor(
     private readonly db: DatabaseService,
     private readonly configService: ConfigService,
     private readonly adapter: TcpJsonV1Adapter,
     private readonly orderRepository: OrderRepository,
+    private readonly orderSettlementService: OrderSettlementService,
     private readonly sessionStatusLogRepository: SessionStatusLogRepository,
-    private readonly farmerFundService: FarmerFundService
+    private readonly runtimeIngestService: RuntimeIngestService,
+    private readonly moduleRef: ModuleRef
   ) {}
 
   getProtocolName() {
-    return 'tcp-json-v1';
+    return 'hj-device-v2';
+  }
+
+  getScanControllerTrialRegisterSpec() {
+    return buildScanControllerTrialSpec({
+      protocol_name: this.getProtocolName(),
+      transport_policy: this.getTransportPolicy(),
+    });
   }
 
   private asObject(value: unknown) {
@@ -175,6 +385,564 @@ export class DeviceGatewayService {
     return Array.isArray(value)
       ? value.map((item) => this.asString(item)).filter((item) => Boolean(item))
       : [];
+  }
+
+  private normalizeWireMsgType(value: unknown) {
+    const normalized = this.asString(value).toUpperCase();
+    if (!normalized) return '';
+    if (normalized === 'RG') return 'REGISTER';
+    if (normalized === 'HB') return 'HEARTBEAT';
+    if (normalized === 'SS') return 'STATE_SNAPSHOT';
+    if (normalized === 'ER') return 'EVENT_REPORT';
+    if (normalized === 'QR') return 'QUERY';
+    if (normalized === 'QS') return 'QUERY_RESULT';
+    if (normalized === 'EX') return 'EXECUTE_ACTION';
+    if (normalized === 'SC') return 'SYNC_CONFIG';
+    if (normalized === 'AK') return 'COMMAND_ACK';
+    if (normalized === 'NK') return 'COMMAND_NACK';
+    return normalized;
+  }
+
+  private toWireMsgType(value: string) {
+    const normalized = this.normalizeWireMsgType(value);
+    if (normalized === 'REGISTER') return 'RG';
+    if (normalized === 'HEARTBEAT') return 'HB';
+    if (normalized === 'STATE_SNAPSHOT') return 'SS';
+    if (normalized === 'EVENT_REPORT') return 'ER';
+    if (normalized === 'QUERY') return 'QR';
+    if (normalized === 'QUERY_RESULT') return 'QS';
+    if (normalized === 'EXECUTE_ACTION') return 'EX';
+    if (normalized === 'SYNC_CONFIG') return 'SC';
+    if (normalized === 'COMMAND_ACK') return 'AK';
+    if (normalized === 'COMMAND_NACK') return 'NK';
+    return normalized;
+  }
+
+  private toWireScopeCode(value: unknown) {
+    const normalized = this.normalizeScope(value);
+    if (normalized === 'common') return 'cm';
+    if (normalized === 'module') return 'md';
+    if (normalized === 'workflow') return 'wf';
+    return normalized;
+  }
+
+  private toWireModuleCode(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'pump_vfd_control') return 'pvc';
+    if (normalized === 'pump_direct_control') return 'pdc';
+    if (normalized === 'single_valve_control') return 'svl';
+    if (normalized === 'electric_meter_modbus') return 'ebr';
+    if (normalized === 'breaker_control') return 'bkr';
+    if (normalized === 'breaker_feedback_monitor') return 'bkf';
+    if (normalized === 'pressure_acquisition') return 'prs';
+    if (normalized === 'flow_acquisition') return 'flw';
+    if (normalized === 'soil_moisture_acquisition') return 'sma';
+    if (normalized === 'soil_temperature_acquisition') return 'sta';
+    if (normalized === 'power_monitoring') return 'pwm';
+    if (normalized === 'payment_qr_control') return 'pay';
+    if (normalized === 'card_auth_reader') return 'cdr';
+    if (normalized === 'valve_feedback_monitor') return 'vfb';
+    return normalized;
+  }
+
+  private toWireQueryCode(value: unknown) {
+    const normalized = this.normalizeSupportedQueryCode(value);
+    if (!normalized) return '';
+    if (normalized === 'query_common_status') return 'qcs';
+    if (normalized === 'query_workflow_state') return 'qwf';
+    if (normalized === 'query_electric_meter') return 'qem';
+    if (normalized === 'query_upgrade_status') return 'qgs';
+    if (normalized === 'query_upgrade_capability') return 'qgc';
+    return normalized;
+  }
+
+  private toWireActionCode(value: unknown) {
+    const normalized = this.normalizeSupportedActionCode(value);
+    if (!normalized) return '';
+    if (normalized === 'play_voice_prompt') return 'ppu';
+    if (normalized === 'upgrade_firmware') return 'upg';
+    if (normalized === 'pause_session') return 'pas';
+    if (normalized === 'resume_session') return 'res';
+    if (normalized === 'start_pump') return 'spu';
+    if (normalized === 'stop_pump') return 'tpu';
+    if (normalized === 'open_valve') return 'ovl';
+    if (normalized === 'close_valve') return 'cvl';
+    return normalized;
+  }
+
+  private toWireMetricCode(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'pressure_mpa') return 'pr';
+    if (normalized === 'flow_m3h') return 'fm';
+    if (normalized === 'power_kw') return 'pw';
+    if (normalized === 'voltage_v') return 'vv';
+    if (normalized === 'current_a') return 'ia';
+    if (normalized === 'energy_wh') return 'ew';
+    if (normalized === 'energy_kwh') return 'ek';
+    if (normalized === 'total_m3') return 'fq';
+    if (normalized === 'runtime_sec') return 'rt';
+    if (normalized === 'battery_soc') return 'bs';
+    if (normalized === 'battery_voltage_v') return 'bv';
+    if (normalized === 'solar_voltage_v') return 'sv';
+    if (normalized === 'signal_csq') return 'csq';
+    if (normalized === 'breaker_state') return 'brs';
+    if (normalized === 'meter_protocol') return 'mp';
+    if (normalized === 'control_protocol') return 'cp';
+    return normalized;
+  }
+
+  private toWireFeatureModules(value: unknown) {
+    return this.asStringArray(value).map((item) => this.toWireModuleCode(item)).filter((item) => Boolean(item));
+  }
+
+  private getRuntimeCheckoutService() {
+    if (!this.runtimeCheckoutService) {
+      this.runtimeCheckoutService = this.moduleRef.get(RuntimeCheckoutService, { strict: false });
+    }
+    if (!this.runtimeCheckoutService) {
+      throw new AppException(ErrorCodes.INTERNAL_ERROR, 'Runtime checkout service is unavailable');
+    }
+    return this.runtimeCheckoutService;
+  }
+
+  private extractEventCode(event: DeviceRuntimeEvent) {
+    return this.asString(event.payload.event_code ?? event.payload.eventCode).toLowerCase();
+  }
+
+  private isCardSwipeRequestedEvent(event: DeviceRuntimeEvent) {
+    return event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED' || this.extractEventCode(event) === 'card_swipe_requested';
+  }
+
+  private isCardSwipeMetadataEvent(event: DeviceRuntimeEvent) {
+    const eventCode = this.extractEventCode(event);
+    return (
+      event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED' ||
+      event.eventType === 'DEVICE_CARD_SWIPE_REJECTED' ||
+      eventCode === 'card_swipe_requested' ||
+      eventCode === 'card_swipe_rejected'
+    );
+  }
+
+  private normalizeQueuedCommandCount(response: Record<string, unknown>) {
+    const queuedCommands = Array.isArray(response.queued_commands) ? response.queued_commands : [];
+    return queuedCommands.length;
+  }
+
+  private mapCardSwipeFailurePrompt(error: unknown) {
+    if (!(error instanceof AppException)) {
+      return 'unavailable';
+    }
+
+    const payload = error.getResponse() as {
+      code?: string;
+      message?: string;
+      data?: Record<string, unknown>;
+    };
+    const code = this.asString(payload?.code).toUpperCase();
+    const message = this.asString(payload?.message).toLowerCase();
+
+    if (code === ErrorCodes.WALLET_INSUFFICIENT_BALANCE) {
+      return 'insufficient_balance';
+    }
+    if (code === ErrorCodes.TARGET_NOT_FOUND) {
+      return message.includes('card') ? 'invalid_card' : 'unavailable';
+    }
+    if (
+      code === ErrorCodes.CONCURRENCY_LIMIT_REACHED ||
+      code === ErrorCodes.ORDER_ALREADY_EXISTS ||
+      code === ErrorCodes.FORBIDDEN ||
+      code === ErrorCodes.DECISION_NOT_ALLOWED ||
+      code === ErrorCodes.SESSION_NOT_STOPPABLE ||
+      code === ErrorCodes.STARTUP_TIMEOUT
+    ) {
+      return 'port_busy';
+    }
+    if (
+      code === ErrorCodes.SAFETY_PROTECTION_TRIGGERED ||
+      code === ErrorCodes.POLICY_NOT_EFFECTIVE ||
+      code === ErrorCodes.RELATION_NOT_CONFIGURED ||
+      code === ErrorCodes.RELATION_FORBIDDEN
+    ) {
+      return 'device_fault';
+    }
+    if (code === ErrorCodes.DEVICE_OFFLINE) {
+      return 'unavailable';
+    }
+    return 'unavailable';
+  }
+
+  private async queueSwipeFeedbackPrompt(imei: string, promptCode: string, client: PoolClient) {
+    return this.queueCommandInClient(
+      {
+        imei,
+        command_code: 'EXECUTE_ACTION',
+        request_payload: {
+          scope: 'common',
+          action_code: 'play_voice_prompt',
+          prompt_code: promptCode,
+          prompt_source: 'platform_card_checkout',
+          clear_queue: true,
+          min_gap_ms: 300
+        },
+        source: 'device_gateway.card_swipe_feedback'
+      },
+      client
+    );
+  }
+
+  private resolveCardSwipeJournalCategory(responseSnapshot: Record<string, unknown>) {
+    if (this.asString(responseSnapshot.error_code) || this.asString(responseSnapshot.errorCode)) {
+      return 'platform_explicit_reject';
+    }
+    if (this.asBoolean(responseSnapshot.awaiting_device_ack)) {
+      return 'pending_device_ack';
+    }
+    if (this.asString(responseSnapshot.action)) {
+      return 'accepted';
+    }
+    return 'platform_processing';
+  }
+
+  private async upsertCardSwipeJournal(input: {
+    userId?: string | null;
+    imei: string;
+    cardToken?: string | null;
+    swipeAction: string;
+    swipeEventId: string;
+    swipeAt?: string | null;
+    requestSnapshot?: Record<string, unknown>;
+    responseSnapshot?: Record<string, unknown>;
+    resultCategory?: string | null;
+    resultCode?: string | null;
+    resultMessage?: string | null;
+    awaitingDeviceAck?: boolean;
+    resolvedAt?: string | null;
+    client: PoolClient;
+  }) {
+    await this.db.query(
+      `
+      insert into card_swipe_event (
+        tenant_id, user_id, imei, card_token, swipe_action, swipe_event_id, swipe_at,
+        request_snapshot_json, response_snapshot_json,
+        result_category, result_code, result_message, awaiting_device_ack, resolved_at
+      )
+      values (
+        $1::uuid, $2::uuid, $3, $4, $5, $6, $7::timestamptz,
+        $8::jsonb, $9::jsonb,
+        $10, $11, $12, $13, $14::timestamptz
+      )
+      on conflict (tenant_id, swipe_event_id) do update
+      set user_id = coalesce(card_swipe_event.user_id, excluded.user_id),
+          imei = coalesce(nullif(card_swipe_event.imei, ''), excluded.imei),
+          card_token = coalesce(card_swipe_event.card_token, excluded.card_token),
+          swipe_action = coalesce(nullif(card_swipe_event.swipe_action, ''), excluded.swipe_action),
+          swipe_at = coalesce(card_swipe_event.swipe_at, excluded.swipe_at),
+          request_snapshot_json = coalesce(card_swipe_event.request_snapshot_json, '{}'::jsonb) || excluded.request_snapshot_json,
+          response_snapshot_json = coalesce(card_swipe_event.response_snapshot_json, '{}'::jsonb) || excluded.response_snapshot_json,
+          result_category = coalesce(excluded.result_category, card_swipe_event.result_category),
+          result_code = coalesce(excluded.result_code, card_swipe_event.result_code),
+          result_message = coalesce(excluded.result_message, card_swipe_event.result_message),
+          awaiting_device_ack = excluded.awaiting_device_ack,
+          resolved_at = coalesce(excluded.resolved_at, card_swipe_event.resolved_at),
+          updated_at = now()
+      `,
+      [
+        TENANT_ID,
+        input.userId ?? null,
+        input.imei,
+        this.asString(input.cardToken) || null,
+        this.asString(input.swipeAction) || 'unknown',
+        input.swipeEventId,
+        this.toIsoTimestamp(input.swipeAt ?? null),
+        JSON.stringify(input.requestSnapshot ?? {}),
+        JSON.stringify(input.responseSnapshot ?? {}),
+        input.resultCategory ?? null,
+        input.resultCode ?? null,
+        input.resultMessage ?? null,
+        Boolean(input.awaitingDeviceAck),
+        this.toIsoTimestamp(input.resolvedAt ?? null)
+      ],
+      input.client
+    );
+  }
+
+  private async bridgeCardSwipeRequestedEvent(event: DeviceRuntimeEvent, client: PoolClient): Promise<CardSwipeBridgeResult> {
+    const payload = this.asObject(event.payload);
+    const cardToken =
+      this.asString(payload.card_token) ||
+      this.asString(payload.cardToken) ||
+      this.asString(payload.access_token) ||
+      this.asString(payload.accessToken);
+    const swipeAction = this.asString(payload.swipe_action ?? payload.swipeAction).toLowerCase();
+    const normalizedSwipeAction = swipeAction === 'start' || swipeAction === 'stop' ? swipeAction : null;
+    const swipeEventId = this.asString(payload.swipe_event_id ?? payload.swipeEventId) || event.msgId;
+    const swipeAt = this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString();
+    const journalRequestSnapshot = {
+      imei: event.imei,
+      swipe_action: normalizedSwipeAction ?? 'unknown',
+      swipe_event_id: swipeEventId,
+      swipe_at: swipeAt,
+      gateway_event_type: event.eventType,
+      gateway_msg_id: event.msgId,
+      gateway_seq_no: event.seqNo,
+      gateway_payload: payload
+    };
+
+    await this.upsertCardSwipeJournal({
+      imei: event.imei,
+      cardToken: cardToken || null,
+      swipeAction: normalizedSwipeAction ?? 'unknown',
+      swipeEventId,
+      swipeAt,
+      requestSnapshot: journalRequestSnapshot,
+      resultCategory: 'platform_processing',
+      awaitingDeviceAck: false,
+      client
+    });
+
+    if (!cardToken) {
+      const queuedPromptCount = (await this.queueSwipeFeedbackPrompt(event.imei, 'invalid_card', client).then(() => 1).catch(() => 0));
+      const responseSnapshot = {
+        error_code: ErrorCodes.VALIDATION_ERROR,
+        error_message: 'card_token is missing from device swipe event',
+        prompt_code: 'invalid_card',
+        queued_command_count: queuedPromptCount
+      };
+      await this.upsertCardSwipeJournal({
+        imei: event.imei,
+        swipeAction: normalizedSwipeAction ?? 'unknown',
+        swipeEventId,
+        swipeAt,
+        requestSnapshot: journalRequestSnapshot,
+        responseSnapshot,
+        resultCategory: 'platform_explicit_reject',
+        resultCode: ErrorCodes.VALIDATION_ERROR,
+        resultMessage: 'card_token is missing from device swipe event',
+        awaitingDeviceAck: false,
+        resolvedAt: swipeAt,
+        client
+      });
+      return {
+        handled: true,
+        accepted: false,
+        action: null,
+        sessionId: null,
+        sessionRef: null,
+        orderId: null,
+        awaitingDeviceAck: false,
+        promptCode: 'invalid_card',
+        errorCode: ErrorCodes.VALIDATION_ERROR,
+        errorMessage: 'card_token is missing from device swipe event',
+        queuedCommandCount: queuedPromptCount,
+        responseSnapshot
+      };
+    }
+
+    try {
+      const checkoutService = this.getRuntimeCheckoutService();
+      const response = this.asObject(
+        await checkoutService.handleCardSwipe(event.imei, cardToken, normalizedSwipeAction, swipeEventId, swipeAt)
+      );
+
+      return {
+        handled: true,
+        accepted: true,
+        action: this.asString(response.action) || null,
+        sessionId: this.asString(response.session_id) || null,
+        sessionRef: this.asString(response.session_ref) || null,
+        orderId: this.asString(response.order_id) || null,
+        awaitingDeviceAck: this.asBoolean(response.awaiting_device_ack),
+        promptCode: null,
+        errorCode: null,
+        errorMessage: null,
+        queuedCommandCount: this.normalizeQueuedCommandCount(response),
+        responseSnapshot: response
+      };
+    } catch (error) {
+      const promptCode = this.mapCardSwipeFailurePrompt(error);
+      const queuedPromptCount = (await this.queueSwipeFeedbackPrompt(event.imei, promptCode, client).then(() => 1).catch(() => 0));
+
+      if (error instanceof AppException) {
+        const payload = error.getResponse() as {
+          code?: string;
+          message?: string;
+          data?: Record<string, unknown>;
+        };
+        const responseSnapshot = {
+          ...this.asObject(payload?.data),
+          error_code: this.asString(payload?.code) || ErrorCodes.INTERNAL_ERROR,
+          error_message: this.asString(payload?.message) || 'card swipe checkout failed',
+          prompt_code: promptCode,
+          queued_command_count: queuedPromptCount
+        };
+        await this.upsertCardSwipeJournal({
+          imei: event.imei,
+          cardToken,
+          swipeAction: normalizedSwipeAction ?? 'unknown',
+          swipeEventId,
+          swipeAt,
+          requestSnapshot: journalRequestSnapshot,
+          responseSnapshot,
+          resultCategory: this.resolveCardSwipeJournalCategory(responseSnapshot),
+          resultCode: this.asString(payload?.code) || ErrorCodes.INTERNAL_ERROR,
+          resultMessage: this.asString(payload?.message) || 'card swipe checkout failed',
+          awaitingDeviceAck: false,
+          resolvedAt: swipeAt,
+          client
+        });
+        return {
+          handled: true,
+          accepted: false,
+          action: null,
+          sessionId: null,
+          sessionRef: null,
+          orderId: null,
+          awaitingDeviceAck: false,
+          promptCode,
+          errorCode: this.asString(payload?.code) || ErrorCodes.INTERNAL_ERROR,
+          errorMessage: this.asString(payload?.message) || 'card swipe checkout failed',
+          queuedCommandCount: queuedPromptCount,
+          responseSnapshot
+        };
+      }
+
+      const responseSnapshot = {
+        error_code: ErrorCodes.INTERNAL_ERROR,
+        error_message: 'card swipe checkout failed',
+        prompt_code: promptCode,
+        queued_command_count: queuedPromptCount
+      };
+      await this.upsertCardSwipeJournal({
+        imei: event.imei,
+        cardToken,
+        swipeAction: normalizedSwipeAction ?? 'unknown',
+        swipeEventId,
+        swipeAt,
+        requestSnapshot: journalRequestSnapshot,
+        responseSnapshot,
+        resultCategory: 'platform_explicit_reject',
+        resultCode: ErrorCodes.INTERNAL_ERROR,
+        resultMessage: 'card swipe checkout failed',
+        awaitingDeviceAck: false,
+        resolvedAt: swipeAt,
+        client
+      });
+
+      return {
+        handled: true,
+        accepted: false,
+        action: null,
+        sessionId: null,
+        sessionRef: null,
+        orderId: null,
+        awaitingDeviceAck: false,
+        promptCode,
+        errorCode: ErrorCodes.INTERNAL_ERROR,
+        errorMessage: 'card swipe checkout failed',
+        queuedCommandCount: queuedPromptCount,
+        responseSnapshot
+      };
+    }
+  }
+
+  private classifyDeviceCardSwipeOutcome(event: DeviceRuntimeEvent) {
+    const reasonCode =
+      this.asString(event.payload.reason_code ?? event.payload.reasonCode) ||
+      this.asString(event.payload.error_code ?? event.payload.errorCode) ||
+      this.asString(event.payload.event_code ?? event.payload.eventCode) ||
+      'device_rejected';
+    const reasonText =
+      this.asString(event.payload.reason_text ?? event.payload.reasonText) ||
+      this.asString(event.payload.error_message ?? event.payload.errorMessage) ||
+      this.asString(event.payload.message) ||
+      null;
+    const normalizedReason = reasonCode.toLowerCase();
+
+    if (normalizedReason.includes('timeout')) {
+      return {
+        category: 'device_local_timeout',
+        code: reasonCode,
+        message: reasonText || 'device local auth timeout'
+      };
+    }
+
+    return {
+      category: 'platform_explicit_reject',
+      code: reasonCode,
+      message: reasonText || 'device reported auth reject'
+    };
+  }
+
+  private async syncCardSwipeOutcomeFromEvent(event: DeviceRuntimeEvent, client: PoolClient) {
+    if (event.eventType !== 'DEVICE_CARD_SWIPE_REJECTED') {
+      return;
+    }
+
+    const swipeEventId =
+      this.asString(event.payload.swipe_event_id ?? event.payload.swipeEventId) ||
+      this.asString(event.payload.request_msg_id ?? event.payload.requestMsgId) ||
+      this.asString(event.payload.correlation_id ?? event.payload.correlationId) ||
+      null;
+    if (!swipeEventId) {
+      return;
+    }
+
+    const outcome = this.classifyDeviceCardSwipeOutcome(event);
+    await this.db.query(
+      `
+      update card_swipe_event
+      set result_category = $3,
+          result_code = $4,
+          result_message = $5,
+          awaiting_device_ack = false,
+          resolved_at = coalesce($6::timestamptz, now()),
+          response_snapshot_json = coalesce(response_snapshot_json, '{}'::jsonb) || $7::jsonb,
+          updated_at = now()
+      where tenant_id = $1
+        and imei = $2
+        and swipe_event_id = $8
+      `,
+      [
+        TENANT_ID,
+        event.imei,
+        outcome.category,
+        outcome.code,
+        outcome.message,
+        this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs),
+        JSON.stringify({
+          device_result_category: outcome.category,
+          device_result_code: outcome.code,
+          device_result_message: outcome.message,
+          gateway_event_type: event.eventType,
+          gateway_msg_id: event.msgId
+        }),
+        swipeEventId
+      ],
+      client
+    );
+  }
+
+  private async markPendingCardSwipeInterrupted(imei: string, client: PoolClient) {
+    await this.db.query(
+      `
+      update card_swipe_event
+      set result_category = 'connection_interrupted_pending',
+          result_code = 'connection_disconnected',
+          result_message = 'device connection closed before auth flow resolved',
+          awaiting_device_ack = false,
+          resolved_at = coalesce(resolved_at, now()),
+          updated_at = now()
+      where tenant_id = $1
+        and imei = $2
+        and result_category = 'pending_device_ack'
+        and resolved_at is null
+        and created_at >= now() - interval '30 minutes'
+      `,
+      [TENANT_ID, imei],
+      client
+    );
   }
 
   private looksLikeUuid(value: string | null | undefined) {
@@ -251,6 +1019,448 @@ export class DeviceGatewayService {
     return 'high';
   }
 
+  private normalizeScope(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (normalized === 'common' || normalized === 'module' || normalized === 'workflow') {
+      return normalized;
+    }
+    return 'module';
+  }
+
+  private normalizeSupportedQueryCode(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'qcs' || normalized === 'query_common_status') return 'query_common_status';
+    if (normalized === 'qwf' || normalized === 'query_workflow_state') return 'query_workflow_state';
+    if (
+      normalized === 'qem' ||
+      normalized === 'query_electric_meter' ||
+      normalized === 'query_meter_snapshot'
+    ) {
+      return 'query_electric_meter';
+    }
+    if (normalized === 'query_upgrade_status') return 'query_upgrade_status';
+    if (normalized === 'query_upgrade_capability') return 'query_upgrade_capability';
+    return normalized;
+  }
+
+  private normalizeSupportedActionCode(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (!normalized) return '';
+    if (normalized === 'ppu' || normalized === 'play_voice_prompt') return 'play_voice_prompt';
+    if (normalized === 'upg' || normalized === 'upgrade_firmware') return 'upgrade_firmware';
+    if (normalized === 'ota_prepare') return 'ota_prepare';
+    if (normalized === 'ota_start') return 'ota_start';
+    if (normalized === 'ota_cancel') return 'ota_cancel';
+    if (normalized === 'ota_commit') return 'ota_commit';
+    if (normalized === 'ota_rollback') return 'ota_rollback';
+    if (normalized === 'pas' || normalized === 'pause_session') return 'pause_session';
+    if (normalized === 'res' || normalized === 'resume_session') return 'resume_session';
+    if (normalized === 'spu' || normalized === 'start_pump') return 'start_pump';
+    if (normalized === 'tpu' || normalized === 'stop_pump') return 'stop_pump';
+    if (normalized === 'ovl' || normalized === 'open_valve') return 'open_valve';
+    if (normalized === 'cvl' || normalized === 'close_valve') return 'close_valve';
+    return normalized;
+  }
+
+  private ensureCommandCode(value: unknown, fieldName: string) {
+    const normalized = this.asString(value).toLowerCase();
+    if (!normalized) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, `${fieldName} is required`);
+    }
+    return normalized;
+  }
+
+  private ensureSupportedQueryCode(value: unknown) {
+    const normalized = this.normalizeSupportedQueryCode(value);
+    if (!normalized) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'query_code is required');
+    }
+    if (!SUPPORTED_PLATFORM_QUERY_CODES.has(normalized)) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        `query_code ${normalized} is not supported by the short-protocol scan controller`,
+      );
+    }
+    return normalized;
+  }
+
+  private ensureSupportedActionCode(value: unknown) {
+    const normalized = this.normalizeSupportedActionCode(value);
+    if (!normalized) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'action_code is required');
+    }
+    if (!SUPPORTED_PLATFORM_ACTION_CODES.has(normalized)) {
+      throw new AppException(
+        ErrorCodes.VALIDATION_ERROR,
+        `action_code ${normalized} is not supported by the short-protocol scan controller`,
+      );
+    }
+    return normalized;
+  }
+
+  private resolveQueryScope(queryCode: string, requestedScope: unknown) {
+    if (queryCode === 'query_workflow_state') return 'workflow';
+    if (
+      queryCode === 'query_common_status' ||
+      queryCode === 'query_electric_meter' ||
+      queryCode === 'query_upgrade_status' ||
+      queryCode === 'query_upgrade_capability'
+    ) {
+      return 'common';
+    }
+    return this.normalizeScope(requestedScope);
+  }
+
+  private resolveActionScope(actionCode: string, requestedScope: unknown) {
+    if (actionCode === 'pause_session' || actionCode === 'resume_session') return 'workflow';
+    if (
+      actionCode === 'play_voice_prompt' ||
+      actionCode === 'upgrade_firmware' ||
+      actionCode === 'ota_prepare' ||
+      actionCode === 'ota_start' ||
+      actionCode === 'ota_cancel' ||
+      actionCode === 'ota_commit' ||
+      actionCode === 'ota_rollback'
+    ) {
+      return 'common';
+    }
+    if (['start_pump', 'stop_pump', 'open_valve', 'close_valve'].includes(actionCode)) return 'module';
+    return this.normalizeScope(requestedScope);
+  }
+
+  private resolveActionModuleCode(actionCode: string, requestedModuleCode: unknown) {
+    if (actionCode === 'start_pump' || actionCode === 'stop_pump') return 'pump_direct_control';
+    if (actionCode === 'open_valve' || actionCode === 'close_valve') return 'single_valve_control';
+    const normalized = this.asString(requestedModuleCode);
+    return normalized || null;
+  }
+
+  private resolveActionTargetRef(actionCode: string, payload: Record<string, unknown>, channelCode?: unknown) {
+    const explicitTargetRef =
+      this.asString(payload.target_ref) ||
+      this.asString(payload.target_channel_code) ||
+      this.asString(channelCode);
+    if (explicitTargetRef) {
+      return explicitTargetRef;
+    }
+    if (actionCode === 'start_pump' || actionCode === 'stop_pump') return 'pump_1';
+    if (actionCode === 'open_valve' || actionCode === 'close_valve') return 'valve_1';
+    return null;
+  }
+
+  private resolveSessionLegacyAction(
+    payload: Record<string, unknown>,
+    pumpAction: 'start_pump' | 'stop_pump',
+    valveAction: 'open_valve' | 'close_valve',
+  ) {
+    const explicitAction = this.normalizeSupportedActionCode(payload.action_code);
+    if (SUPPORTED_PLATFORM_ACTION_CODES.has(explicitAction)) {
+      return explicitAction;
+    }
+    const moduleCode = this.asString(payload.module_code).toLowerCase();
+    const targetType = this.asString(payload.target_type).toLowerCase();
+    const targetRef =
+      this.asString(payload.target_ref || payload.target_channel_code || payload.channel_code).toLowerCase();
+    if (
+      targetType === 'valve' ||
+      moduleCode === 'single_valve_control' ||
+      targetRef.startsWith('valve')
+    ) {
+      return valveAction;
+    }
+    return pumpAction;
+  }
+
+  private extractEventPayload(input: Record<string, unknown>) {
+    const explicitPayload = this.asObject(input.p);
+    const fallbackPayload = Object.entries(input).reduce<Record<string, unknown>>((acc, [key, value]) => {
+      if (!this.transportEnvelopeKeys.has(key)) {
+        acc[key] = value;
+      }
+      return acc;
+    }, {});
+
+    return {
+      ...fallbackPayload,
+      ...explicitPayload
+    };
+  }
+
+  private buildDefaultRequestMsgId(commandToken: string) {
+    return `cmd-${commandToken}`;
+  }
+
+  private buildDefaultRequestSeqNo(commandToken: string) {
+    const maxSignedInt32 = 2147483647;
+    const compact = commandToken.replace(/-/g, '').slice(0, 8);
+    const parsed = compact ? Number.parseInt(compact, 16) : Number.NaN;
+    if (Number.isFinite(parsed) && parsed > 0) {
+      const normalized = Math.trunc(parsed >>> 0) % maxSignedInt32;
+      return normalized > 0 ? normalized : 1;
+    }
+    return Number(String(Date.now()).slice(-9));
+  }
+
+  private sanitizeWirePayload(value: Record<string, unknown>) {
+    const payload = { ...this.asObject(value) };
+    delete payload.source;
+    delete payload.command_code;
+    delete payload.command_id;
+    delete payload.device_command_token;
+    delete payload.target_device_id;
+    delete payload.imei;
+    delete payload.session_ref;
+    delete payload.start_token;
+    return payload;
+  }
+
+  private buildCompactCommandPayload(
+    value: Record<string, unknown>,
+    options?: { msgType?: string | null }
+  ) {
+    const source = this.sanitizeWirePayload(value);
+    const compactPayload: Record<string, unknown> = {};
+    const normalizedMsgType = this.normalizeWireMsgType(options?.msgType ?? '');
+    const isExecute = normalizedMsgType === 'EXECUTE_ACTION';
+    const isQuery = normalizedMsgType === 'QUERY';
+    const assignString = (key: string, normalized: string) => {
+      if (normalized) {
+        compactPayload[key] = normalized;
+      }
+    };
+
+    assignString('sc', this.toWireScopeCode(source.scope));
+    assignString('qc', this.toWireQueryCode(source.query_code));
+    assignString('ac', this.toWireActionCode(source.action_code));
+    if (!isExecute) {
+      assignString('mc', this.toWireModuleCode(source.module_code));
+      assignString('mi', this.asString(source.module_instance_code));
+      assignString('cc', this.asString(source.channel_code));
+    }
+    assignString('ff', this.asString(source.firmware_family));
+    assignString('fv', this.asString(source.firmware_version));
+    assignString('hs', this.asString(source.hardware_sku));
+    assignString('hr', this.asString(source.hardware_rev));
+    assignString('mp', this.asString(source.meter_protocol).toLowerCase());
+    assignString('cp', this.asString(source.control_protocol).toLowerCase());
+    assignString('brs', this.asString(source.breaker_state).toLowerCase());
+
+    const configVersion = this.asNumber(source.config_version);
+    if (configVersion !== null) {
+      compactPayload.cv = Math.trunc(configVersion);
+    }
+
+    const featureModules = this.toWireFeatureModules(source.feature_modules);
+    if (featureModules.length > 0) {
+      compactPayload.fm = featureModules;
+    }
+
+    const metricCodes = Array.isArray(source.metric_codes)
+      ? source.metric_codes.map((item) => this.toWireMetricCode(item)).filter((item) => Boolean(item))
+      : [];
+    if (metricCodes.length > 0) {
+      compactPayload.ms = metricCodes;
+    }
+
+    if (Array.isArray(source.channel_bindings) && source.channel_bindings.length > 0) {
+      compactPayload.cb = source.channel_bindings;
+    }
+    if (source.runtime_rules && typeof source.runtime_rules === 'object' && !Array.isArray(source.runtime_rules)) {
+      compactPayload.rr = this.asObject(source.runtime_rules);
+    }
+    if (source.resource_inventory && typeof source.resource_inventory === 'object' && !Array.isArray(source.resource_inventory)) {
+      compactPayload.ri = this.asObject(source.resource_inventory);
+    }
+    if (source.params && typeof source.params === 'object' && !Array.isArray(source.params)) {
+      compactPayload.pm = this.asObject(source.params);
+    }
+    if (!isExecute && source.session_id !== undefined && source.session_id !== null && source.session_id !== '') {
+      compactPayload.sid = source.session_id;
+    }
+    if (source.target_ref !== undefined && source.target_ref !== null && source.target_ref !== '') {
+      compactPayload.tr = source.target_ref;
+    }
+
+    for (const [key, value] of Object.entries(source)) {
+      if (value === undefined || value === null || value === '') {
+        continue;
+      }
+      if (
+        [
+          'scope',
+          'query_code',
+          'action_code',
+          'module_code',
+          'module_instance_code',
+          'channel_code',
+          'metric_codes',
+          'config_version',
+          'feature_modules',
+          'firmware_family',
+          'firmware_version',
+          'hardware_sku',
+          'hardware_rev',
+          'channel_bindings',
+          'runtime_rules',
+          'resource_inventory',
+          'params',
+          'session_id',
+          'target_ref',
+          'start_token',
+          'meter_protocol',
+          'control_protocol',
+          'breaker_state'
+        ].includes(key)
+      ) {
+        continue;
+      }
+      if (isExecute) {
+        continue;
+      }
+      if (isQuery && !['tr', 'pm'].includes(key)) {
+        continue;
+      }
+      compactPayload[key] = value;
+    }
+
+    return compactPayload;
+  }
+
+  private buildWireCommandEnvelope(command: {
+    commandToken: string;
+    commandCode: string;
+    imei: string;
+    sessionRef: string | null;
+    requestMsgId: string | null;
+    requestSeqNo: number | null;
+    requestPayload: Record<string, unknown>;
+  }) {
+    const normalizedCommandCode = this.asString(command.commandCode).toUpperCase();
+    const payload = this.sanitizeWirePayload(command.requestPayload);
+    let type = normalizedCommandCode;
+
+    if (normalizedCommandCode === 'START_SESSION') {
+      const actionCode = this.resolveSessionLegacyAction(payload, 'start_pump', 'open_valve');
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope(actionCode, payload.scope);
+      payload.action_code = actionCode;
+      payload.module_code = this.resolveActionModuleCode(actionCode, payload.module_code);
+      payload.target_ref = this.resolveActionTargetRef(actionCode, payload, payload.channel_code);
+      payload.channel_code = null;
+      payload.session_id = this.asString(payload.session_id) || command.sessionRef || null;
+    } else if (normalizedCommandCode === 'STOP_SESSION') {
+      const actionCode = this.resolveSessionLegacyAction(payload, 'stop_pump', 'close_valve');
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope(actionCode, payload.scope);
+      payload.action_code = actionCode;
+      payload.module_code = this.resolveActionModuleCode(actionCode, payload.module_code);
+      payload.target_ref = this.resolveActionTargetRef(actionCode, payload, payload.channel_code);
+      payload.channel_code = null;
+      payload.session_id = this.asString(payload.session_id) || command.sessionRef || null;
+    } else if (normalizedCommandCode === 'START_PUMP') {
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope('start_pump', payload.scope);
+      payload.module_code = this.resolveActionModuleCode('start_pump', payload.module_code);
+      payload.action_code = 'start_pump';
+      payload.target_ref = this.resolveActionTargetRef('start_pump', payload, payload.channel_code);
+      payload.channel_code = null;
+    } else if (normalizedCommandCode === 'STOP_PUMP') {
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope('stop_pump', payload.scope);
+      payload.module_code = this.resolveActionModuleCode('stop_pump', payload.module_code);
+      payload.action_code = 'stop_pump';
+      payload.target_ref = this.resolveActionTargetRef('stop_pump', payload, payload.channel_code);
+      payload.channel_code = null;
+    } else if (normalizedCommandCode === 'OPEN_VALVE') {
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope('open_valve', payload.scope);
+      payload.module_code = this.resolveActionModuleCode('open_valve', payload.module_code);
+      payload.action_code = 'open_valve';
+      payload.target_ref = this.resolveActionTargetRef('open_valve', payload, payload.channel_code);
+      payload.channel_code = null;
+    } else if (normalizedCommandCode === 'CLOSE_VALVE') {
+      type = 'EXECUTE_ACTION';
+      payload.scope = this.resolveActionScope('close_valve', payload.scope);
+      payload.module_code = this.resolveActionModuleCode('close_valve', payload.module_code);
+      payload.action_code = 'close_valve';
+      payload.target_ref = this.resolveActionTargetRef('close_valve', payload, payload.channel_code);
+      payload.channel_code = null;
+    } else if (normalizedCommandCode === 'SYNC_STATE') {
+      type = 'QUERY';
+      payload.scope = this.resolveQueryScope('query_common_status', payload.scope);
+      payload.query_code = 'query_common_status';
+    } else if (normalizedCommandCode === 'QUERY') {
+      type = 'QUERY';
+      const queryCode = this.ensureSupportedQueryCode(payload.query_code);
+      payload.query_code = queryCode;
+      payload.scope = this.resolveQueryScope(queryCode, payload.scope);
+    } else if (normalizedCommandCode === 'EXECUTE_ACTION') {
+      type = 'EXECUTE_ACTION';
+      const actionCode = this.ensureSupportedActionCode(payload.action_code);
+      payload.action_code = actionCode;
+      payload.scope = this.resolveActionScope(actionCode, payload.scope);
+      payload.module_code = this.resolveActionModuleCode(actionCode, payload.module_code);
+      payload.target_ref = this.resolveActionTargetRef(actionCode, payload, payload.channel_code);
+      payload.channel_code = null;
+    } else if (normalizedCommandCode === 'SYNC_CONFIG') {
+      type = 'SYNC_CONFIG';
+    } else {
+      return null;
+    }
+
+    const envelope: Record<string, unknown> = {
+      v: 1,
+      t: this.toWireMsgType(type),
+      i: command.imei,
+      m: command.requestMsgId || this.buildDefaultRequestMsgId(command.commandToken),
+      s: command.requestSeqNo ?? this.buildDefaultRequestSeqNo(command.commandToken),
+      c: command.commandToken,
+      p: this.buildCompactCommandPayload(payload, { msgType: type })
+    };
+
+    if (command.sessionRef) {
+      envelope.r = command.sessionRef;
+    }
+
+    return envelope;
+  }
+
+  private buildWireMessageForRecord(command: {
+    commandToken: string;
+    commandCode: string;
+    imei: string;
+    sessionRef?: string | null;
+    requestMsgId?: string | null;
+    requestSeqNo?: number | null;
+    requestPayload: Record<string, unknown>;
+  }) {
+    return this.buildWireCommandEnvelope({
+      commandToken: command.commandToken,
+      commandCode: command.commandCode,
+      imei: command.imei,
+      sessionRef: command.sessionRef ?? null,
+      requestMsgId: command.requestMsgId ?? null,
+      requestSeqNo: command.requestSeqNo ?? null,
+      requestPayload: command.requestPayload
+    }) ?? {};
+  }
+
+  private serializeCommandRecord(row: DeviceGatewayCommandRecord): DeviceGatewayCommandRecord {
+    return {
+      ...row,
+      wireMessage: this.buildWireMessageForRecord({
+        commandToken: row.commandToken,
+        commandCode: row.commandCode,
+        imei: row.imei,
+        sessionRef: row.sessionRef,
+        requestMsgId: row.requestMsgId,
+        requestSeqNo: row.requestSeqNo,
+        requestPayload: row.requestPayload
+      })
+    };
+  }
+
   getTransportPolicy() {
     return {
       retry_limit: this.getRetryLimit(),
@@ -308,6 +1518,83 @@ export class DeviceGatewayService {
     };
   }
 
+  private isSynchronousStartCommand(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    if (['START_SESSION', 'START_PUMP', 'OPEN_VALVE'].includes(commandCode)) {
+      return true;
+    }
+
+    const payload = this.asObject(input.requestPayload);
+    const commandPlan = this.asString(payload.command_plan ?? payload.commandPlan).toLowerCase();
+    const requestedFrom = this.asString(payload.requested_from ?? payload.requestedFrom).toLowerCase();
+    const startToken = this.asString(payload.start_token ?? payload.startToken).toLowerCase();
+
+    return (
+      requestedFrom === 'runtime_engine' &&
+      (commandPlan === 'session_start' || commandPlan === 'session_start_integrated' || startToken.startsWith('start-'))
+    );
+  }
+
+  private isSynchronousWorkflowControlCommand(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    const payload = this.asObject(input.requestPayload);
+    const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
+    const commandPlan = this.asString(payload.command_plan ?? payload.commandPlan).toLowerCase();
+    if (commandCode !== 'EXECUTE_ACTION') {
+      return false;
+    }
+    return (
+      actionCode === 'pause_session' ||
+      actionCode === 'resume_session' ||
+      commandPlan === 'session_pause' ||
+      commandPlan === 'session_resume'
+    );
+  }
+
+  private isSessionStopCommand(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    const payload = this.asObject(input.requestPayload);
+    const commandPlan = this.asString(payload.command_plan ?? payload.commandPlan).toLowerCase();
+    return (
+      ['STOP_SESSION', 'STOP_PUMP', 'CLOSE_VALVE'].includes(commandCode) &&
+      (commandPlan === 'session_stop' || commandPlan === 'session_stop_integrated')
+    );
+  }
+
+  private isNonReplayableRealtimeControlCommand(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    if (
+      ['START_SESSION', 'STOP_SESSION', 'START_PUMP', 'STOP_PUMP', 'OPEN_VALVE', 'CLOSE_VALVE'].includes(commandCode)
+    ) {
+      return true;
+    }
+
+    const payload = this.asObject(input.requestPayload);
+    const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
+    return isNonReplayableRealtimeActionCode(actionCode);
+  }
+
+  private resolveWorkflowActionCode(commandDispatch: ResolvedCommandDispatch | null, event: DeviceRuntimeEvent) {
+    return this.asString(
+      commandDispatch?.requestPayload?.action_code ??
+        commandDispatch?.requestPayload?.actionCode ??
+        event.payload.action_code ??
+        event.payload.actionCode
+    ).toLowerCase();
+  }
+
   private resolveNackTransition(deviceCommand: ResolvedDeviceCommand, event: DeviceRuntimeEvent) {
     const payload = this.asObject(event.payload);
     const result = this.asString(payload.result).toLowerCase();
@@ -318,8 +1605,23 @@ export class DeviceGatewayService {
       this.asString(payload.message) ||
       'device_command_nack';
     const forceDeadLetter = this.asBoolean(payload.dead_letter) || result === 'dead_letter';
+    const synchronousStartCommand = this.isSynchronousStartCommand({
+      commandCode: deviceCommand.commandCode,
+      requestPayload: { ...this.asObject(deviceCommand.responsePayload), ...payload }
+    });
+    const synchronousWorkflowControlCommand = this.isSynchronousWorkflowControlCommand({
+      commandCode: deviceCommand.commandCode,
+      requestPayload: { ...this.asObject(deviceCommand.responsePayload), ...payload }
+    });
+    const nonReplayableRealtimeControlCommand = this.isNonReplayableRealtimeControlCommand({
+      commandCode: deviceCommand.commandCode,
+      requestPayload: { ...this.asObject(deviceCommand.responsePayload), ...payload }
+    });
     const retryable =
       !forceDeadLetter &&
+      !nonReplayableRealtimeControlCommand &&
+      !synchronousStartCommand &&
+      !synchronousWorkflowControlCommand &&
       (this.asBoolean(payload.retryable) ||
         this.asBoolean(payload.can_retry) ||
         this.asBoolean(payload.recoverable) ||
@@ -364,34 +1666,123 @@ export class DeviceGatewayService {
   }
 
   private buildValidatedEnvelope(input: Record<string, unknown>): DeviceEnvelope {
-    const protocolVersion = this.asString(input.protocolVersion) || 'tcp-json-v1';
-    const imei = this.asString(input.imei);
-    const msgId = this.asString(input.msgId);
-    const msgType = this.asString(input.msgType);
-    const seqNo = this.asNumber(input.seqNo);
+    const payload = this.extractEventPayload(input);
+    const envelopeVersion = this.asNumber(input.v);
+    const imei = this.asString(input.i);
+    const msgId = this.asString(input.m);
+    const msgType = this.normalizeWireMsgType(input.t);
+    const seqNo = this.asNumber(input.s);
+    const cumulativeEnergyWhFromPayload = this.asNumber(payload.ew);
+    const cumulativeEnergyKwhFromPayload = this.asNumber(payload.ek);
 
-    if (!imei || !msgId || !msgType || seqNo === null) {
-      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'imei, msgId, msgType, and seqNo are required');
+    if (envelopeVersion !== 1 || !imei || !msgId || !msgType || seqNo === null) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'short envelope v/t/i/m/s is required and v must equal 1');
     }
 
     return {
-      protocolVersion,
+      protocol: this.getProtocolName(),
+      protocolVersion: `v${Math.trunc(envelopeVersion)}`,
       imei,
       msgId,
       seqNo,
       msgType,
-      deviceTs: this.toIsoTimestamp(this.asString(input.deviceTs)) ?? null,
-      serverRxTs: this.toIsoTimestamp(this.asString(input.serverRxTs)) ?? new Date().toISOString(),
-      sessionRef: this.asString(input.sessionRef) || null,
-      runState: this.asString(input.runState) || null,
-      powerState: this.asString(input.powerState) || null,
-      alarmCodes: this.asStringArray(input.alarmCodes),
-      cumulativeRuntimeSec: this.asNumber(input.cumulativeRuntimeSec),
-      cumulativeEnergyWh: this.asNumber(input.cumulativeEnergyWh),
-      cumulativeFlow: this.asNumber(input.cumulativeFlow),
-      payload: this.asObject(input.payload),
+      deviceTs: this.toIsoTimestamp(this.asString(input.ts)) ?? null,
+      serverRxTs: new Date().toISOString(),
+      correlationId: this.asString(input.c) || null,
+      sessionRef: this.asString(input.r) || null,
+      runState: this.asString(payload.run_state ?? payload.rs) || null,
+      powerState: this.asString(payload.power_state ?? payload.ps) || null,
+      alarmCodes: this.asStringArray(payload.alarm_codes ?? payload.al),
+      cumulativeRuntimeSec: this.asNumber(payload.rt),
+      cumulativeEnergyWh:
+        cumulativeEnergyWhFromPayload ??
+        (cumulativeEnergyKwhFromPayload === null ? null : cumulativeEnergyKwhFromPayload * 1000),
+      cumulativeFlow: this.asNumber(payload.fq),
+      payload,
       integrity: this.asObject(input.integrity)
     };
+  }
+
+  private buildDeviceExtPatch(event: DeviceRuntimeEvent) {
+    const payload = this.asObject(event.payload);
+    const identity = this.asObject(payload.identity);
+    const patch: Record<string, unknown> = {};
+    const assignString = (key: string, ...values: unknown[]) => {
+      for (const value of values) {
+        const normalized = this.asString(value);
+        if (normalized) {
+          patch[key] = normalized;
+          return;
+        }
+      }
+    };
+    const assignNumber = (key: string, ...values: unknown[]) => {
+      for (const value of values) {
+        const normalized = this.asNumber(value);
+        if (normalized !== null) {
+          patch[key] = normalized;
+          return;
+        }
+      }
+    };
+    const featureModules = this.asStringArray(payload.feature_modules ?? payload.featureModules);
+    const resourceInventory = this.asObject(payload.resource_inventory ?? payload.resourceInventory);
+    const runtimeRules = this.asObject(payload.runtime_rules ?? payload.runtimeRules);
+    const controllerState = this.asObject(payload.controller_state ?? payload.controllerState);
+    const commonStatus = this.asObject(payload.common_status ?? payload.commonStatus);
+
+    assignString('software_family', payload.software_family, payload.softwareFamily, identity.software_family, identity.softwareFamily);
+    assignString('software_version', payload.software_version, payload.softwareVersion, identity.software_version, identity.softwareVersion);
+    assignString('hardware_sku', payload.hardware_sku, payload.hardwareSku, identity.hardware_sku, identity.hardwareSku);
+    assignString('hardware_rev', payload.hardware_rev, payload.hardwareRev, identity.hardware_rev, identity.hardwareRev);
+    assignString('firmware_family', payload.firmware_family, payload.firmwareFamily, identity.firmware_family, identity.firmwareFamily);
+    assignString('firmware_version', payload.firmware_version, payload.firmwareVersion, identity.firmware_version, identity.firmwareVersion);
+    assignString('controller_role', payload.controller_role, payload.controllerRole);
+    assignString('deployment_mode', payload.deployment_mode, payload.deploymentMode);
+    assignString(
+      'meter_protocol',
+      payload.meter_protocol,
+      payload.meterProtocol,
+      commonStatus.meter_protocol,
+      commonStatus.meterProtocol
+    );
+    assignString(
+      'control_protocol',
+      payload.control_protocol,
+      payload.controlProtocol,
+      commonStatus.control_protocol,
+      commonStatus.controlProtocol
+    );
+    assignString('iccid', payload.iccid, identity.iccid, payload.sim_iccid, commonStatus.iccid, commonStatus.sim_iccid);
+    assignString('chip_sn', payload.chip_sn, payload.chipSn);
+    assignString('module_model', payload.module_model, payload.moduleModel);
+    assignNumber('config_version', payload.config_version, payload.configVersion);
+
+    if (featureModules.length > 0) {
+      patch.feature_modules = featureModules;
+      patch.auto_identified = true;
+    }
+    if (Object.keys(resourceInventory).length > 0) {
+      patch.resource_inventory = resourceInventory;
+      patch.auto_identified = true;
+    }
+    if (Array.isArray(payload.channel_bindings ?? payload.channelBindings)) {
+      patch.channel_bindings = payload.channel_bindings ?? payload.channelBindings;
+    }
+    if (Object.keys(runtimeRules).length > 0) {
+      patch.runtime_rules = runtimeRules;
+    }
+    if (Object.keys(controllerState).length > 0) {
+      patch.last_controller_state = controllerState;
+    }
+    if (Object.keys(commonStatus).length > 0) {
+      patch.last_common_status = commonStatus;
+    }
+    if (event.eventType === 'DEVICE_REGISTERED') {
+      patch.last_register_payload = payload;
+      patch.auto_identified = true;
+    }
+    return patch;
   }
 
   private async findDeviceByImei(imei: string, client: PoolClient) {
@@ -403,7 +1794,10 @@ export class DeviceGatewayService {
         device_code as "deviceCode",
         device_name as "deviceName",
         online_state as "onlineState",
-        runtime_state as "runtimeState"
+        runtime_state as "runtimeState",
+        nullif(ext_json->>'project_id', '') as "projectId",
+        nullif(ext_json->>'block_id', '') as "blockId",
+        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode"
       from device
       where tenant_id = $1 and imei = $2
       limit 1
@@ -424,7 +1818,10 @@ export class DeviceGatewayService {
         device_code as "deviceCode",
         device_name as "deviceName",
         online_state as "onlineState",
-        runtime_state as "runtimeState"
+        runtime_state as "runtimeState",
+        nullif(ext_json->>'project_id', '') as "projectId",
+        nullif(ext_json->>'block_id', '') as "blockId",
+        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode"
       from device
       where tenant_id = $1 and id = $2::uuid
       limit 1
@@ -488,7 +1885,8 @@ export class DeviceGatewayService {
         session_id as "sessionId",
         target_device_id as "targetDeviceId",
         command_code as "commandCode",
-        dispatch_status as "dispatchStatus"
+        dispatch_status as "dispatchStatus",
+        request_payload_json as "requestPayload"
       from command_dispatch
       where id = $1::uuid
       limit 1
@@ -565,7 +1963,8 @@ export class DeviceGatewayService {
         session_id as "sessionId",
         target_device_id as "targetDeviceId",
         command_code as "commandCode",
-        dispatch_status as "dispatchStatus"
+        dispatch_status as "dispatchStatus",
+        request_payload_json as "requestPayload"
       from command_dispatch
       where target_device_id = $1::uuid
         and (
@@ -684,51 +2083,557 @@ export class DeviceGatewayService {
     return result.rows[0] ?? null;
   }
 
-  private async insertMessageLog(event: DeviceRuntimeEvent, deviceId: string | null, client: PoolClient) {
-    const inserted = await this.db.query<{ id: string }>(
+  private truncateString(value: string, maxLength = 240) {
+    if (value.length <= maxLength) return value;
+    return `${value.slice(0, Math.max(0, maxLength - 1))}…`;
+  }
+
+  private buildPayloadPreview(value: unknown, depth = 0): unknown {
+    if (value === null || value === undefined) return value ?? null;
+    if (depth >= 3) {
+      if (Array.isArray(value)) {
+        return `[${value.length} items]`;
+      }
+      if (typeof value === 'object') {
+        return '[object]';
+      }
+    }
+
+    if (typeof value === 'string') {
+      return this.truncateString(value, 240);
+    }
+    if (typeof value === 'number' || typeof value === 'boolean') {
+      return value;
+    }
+    if (Array.isArray(value)) {
+      return value.slice(0, 8).map((item) => this.buildPayloadPreview(item, depth + 1));
+    }
+    if (typeof value === 'object') {
+      return Object.entries(value as Record<string, unknown>)
+        .slice(0, 24)
+        .reduce<Record<string, unknown>>((acc, [key, current]) => {
+          acc[key] = this.buildPayloadPreview(current, depth + 1);
+          return acc;
+        }, {});
+    }
+    return String(value);
+  }
+
+  private serializeRawBody(value: Record<string, unknown>) {
+    return JSON.stringify(value, null, 2);
+  }
+
+  private buildInteractionLogPayloadArtifacts(payload: Record<string, unknown>) {
+    const rawBodyText = this.serializeRawBody(payload);
+    const payloadSizeBytes = Buffer.byteLength(rawBodyText, 'utf8');
+    const canStoreInline = payloadSizeBytes <= 64 * 1024;
+    return {
+      payloadJson: payload,
+      payloadPreviewJson: this.asObject(this.buildPayloadPreview(payload)),
+      payloadSizeBytes,
+      rawBodyText: canStoreInline ? rawBodyText : null,
+      rawBodyRef: canStoreInline ? null : 'oversize:pending-object-store',
+      storageTier: 'hot'
+    };
+  }
+
+  private buildInteractionLogCursor(serverRxTs: string, id: string) {
+    return Buffer.from(JSON.stringify({ serverRxTs, id }), 'utf8').toString('base64url');
+  }
+
+  private parseInteractionLogCursor(cursor: string | null | undefined) {
+    const normalized = this.asString(cursor);
+    if (!normalized) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(normalized, 'base64url').toString('utf8')) as {
+        serverRxTs?: string;
+        id?: string;
+      };
+      const serverRxTs = this.toIsoTimestamp(decoded.serverRxTs ?? null);
+      const id = this.asString(decoded.id);
+      if (!serverRxTs || !id) return null;
+      return { serverRxTs, id };
+    } catch {
+      return null;
+    }
+  }
+
+  private buildTcpAuditCursor(createdAt: string, id: string) {
+    return Buffer.from(JSON.stringify({ createdAt, id }), 'utf8').toString('base64url');
+  }
+
+  private parseTcpAuditCursor(cursor: string | null | undefined) {
+    const normalized = this.asString(cursor);
+    if (!normalized) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(normalized, 'base64url').toString('utf8')) as {
+        createdAt?: string;
+        id?: string;
+      };
+      const createdAt = this.toIsoTimestamp(decoded.createdAt ?? null);
+      const id = this.asString(decoded.id);
+      if (!createdAt || !id) return null;
+      return { createdAt, id };
+    } catch {
+      return null;
+    }
+  }
+
+  private formatTcpAuditError(error: unknown) {
+    if (error instanceof AppException) {
+      const payload = error.getResponse() as {
+        code?: string;
+        message?: string;
+      };
+      const code = this.asString(payload?.code);
+      const message = this.asString(payload?.message) || error.message;
+      return code ? `${code}: ${message}` : message;
+    }
+    if (error instanceof Error) return error.message;
+    return this.asString(error) || 'Unknown TCP audit error';
+  }
+
+  private classifyTcpAuditIngestStatus(error: unknown) {
+    if (error instanceof AppException) {
+      const status = error.getStatus();
+      if (status >= 400 && status < 500) {
+        return 'rejected' as const;
+      }
+    }
+    return 'failed' as const;
+  }
+
+  async createTcpAuditLog(input: {
+    connection_id?: string | null;
+    transport_type?: string | null;
+    direction?: string | null;
+    remote_addr?: string | null;
+    remote_port?: number | null;
+    imei?: string | null;
+    msg_type?: string | null;
+    protocol_version?: string | null;
+    frame_size_bytes?: number | null;
+    raw_frame_text?: string | null;
+    parse_status?: string | null;
+    ingest_status?: string | null;
+    ingest_error?: string | null;
+    request_snapshot?: Record<string, unknown> | null;
+  }) {
+    const result = await this.db.query<{
+      id: string;
+      transportType: string;
+      direction: string;
+      connectionId: string;
+      remoteAddr: string | null;
+      remotePort: number | null;
+      imei: string | null;
+      msgType: string | null;
+      protocolVersion: string | null;
+      frameSizeBytes: number;
+      parseStatus: string;
+      ingestStatus: string;
+      ingestError: string | null;
+      rawFrameText: string;
+      requestSnapshot: Record<string, unknown>;
+      createdAt: string;
+      updatedAt: string;
+    }>(
       `
-      insert into device_message_log (
-        id, tenant_id, imei, device_id, connection_id, protocol_version, direction,
-        msg_id, seq_no, msg_type, session_ref, command_id, device_ts, server_rx_ts,
-        idempotency_key, ordering_key, integrity_ok, clock_drift_sec, payload_json
+      insert into device_tcp_audit_log (
+        id, tenant_id, connection_id, transport_type, direction, remote_addr, remote_port,
+        imei, msg_type, protocol_version, frame_size_bytes, raw_frame_text,
+        parse_status, ingest_status, ingest_error, request_snapshot_json
       )
       values (
-        $1, $2, $3, $4::uuid, $5, $6, 'inbound',
-        $7, $8, $9, $10, $11::uuid, $12::timestamptz, $13::timestamptz,
-        $14, $15, true, $16, $17::jsonb
+        $1::uuid, $2, $3, $4, $5, $6, $7,
+        $8, $9, $10, $11, $12,
+        $13, $14, $15, $16::jsonb
       )
-      on conflict (tenant_id, idempotency_key) do nothing
-      returning id
+      returning
+        id::text as id,
+        transport_type as "transportType",
+        direction as direction,
+        connection_id as "connectionId",
+        remote_addr as "remoteAddr",
+        remote_port as "remotePort",
+        imei as imei,
+        msg_type as "msgType",
+        protocol_version as "protocolVersion",
+        frame_size_bytes as "frameSizeBytes",
+        parse_status as "parseStatus",
+        ingest_status as "ingestStatus",
+        ingest_error as "ingestError",
+        raw_frame_text as "rawFrameText",
+        request_snapshot_json as "requestSnapshot",
+        created_at::text as "createdAt",
+        updated_at::text as "updatedAt"
       `,
       [
         randomUUID(),
         TENANT_ID,
-        event.imei,
-        deviceId,
-        `http:${event.imei}`,
-        'tcp-json-v1',
-        event.msgId,
-        event.seqNo,
-        event.msgType,
-        event.sessionRef ?? null,
-        this.looksLikeUuid(event.commandId) ? event.commandId : null,
-        this.toIsoTimestamp(event.deviceTs ?? null),
-        this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
-        event.idempotencyKey,
-        event.orderingKey,
-        event.clockDriftSec ?? null,
-        JSON.stringify({
-          event_type: event.eventType,
-          payload: event.payload,
-          counters: event.counters
-        })
+        this.asString(input.connection_id) || 'unknown',
+        this.asString(input.transport_type) || 'tcp',
+        this.asString(input.direction) || 'inbound',
+        this.asString(input.remote_addr) || null,
+        input.remote_port ?? null,
+        this.asString(input.imei) || null,
+        this.asString(input.msg_type) || null,
+        this.asString(input.protocol_version) || null,
+        Math.max(0, Math.trunc(Number(input.frame_size_bytes ?? 0) || 0)),
+        typeof input.raw_frame_text === 'string' ? input.raw_frame_text : '',
+        this.asString(input.parse_status) || 'parsed',
+        this.asString(input.ingest_status) || 'pending',
+        this.asString(input.ingest_error) || null,
+        JSON.stringify(this.asObject(input.request_snapshot))
+      ]
+    );
+
+    return result.rows[0];
+  }
+
+  async finalizeTcpAuditLog(
+    auditLogId: string | null | undefined,
+    input: {
+      imei?: string | null;
+      msg_type?: string | null;
+      protocol_version?: string | null;
+      parse_status?: string | null;
+      ingest_status?: string | null;
+      ingest_error?: string | null;
+      request_snapshot?: Record<string, unknown> | null;
+    }
+  ) {
+    const normalizedAuditLogId = this.asString(auditLogId);
+    if (!this.looksLikeUuid(normalizedAuditLogId)) {
+      return { updated: false, reason: 'invalid_audit_log_id' as const };
+    }
+
+    const result = await this.db.query<{ id: string }>(
+      `
+      update device_tcp_audit_log
+      set imei = coalesce($3, imei),
+          msg_type = coalesce($4, msg_type),
+          protocol_version = coalesce($5, protocol_version),
+          parse_status = coalesce($6, parse_status),
+          ingest_status = coalesce($7, ingest_status),
+          ingest_error = $8,
+          request_snapshot_json = case
+            when $9::jsonb = '{}'::jsonb then request_snapshot_json
+            else coalesce(request_snapshot_json, '{}'::jsonb) || $9::jsonb
+          end,
+          updated_at = now()
+      where tenant_id = $1
+        and id = $2::uuid
+      returning id::text as id
+      `,
+      [
+        TENANT_ID,
+        normalizedAuditLogId,
+        this.asString(input.imei) || null,
+        this.asString(input.msg_type) || null,
+        this.asString(input.protocol_version) || null,
+        this.asString(input.parse_status) || null,
+        this.asString(input.ingest_status) || null,
+        input.ingest_error === undefined ? null : this.asString(input.ingest_error) || null,
+        JSON.stringify(this.asObject(input.request_snapshot))
+      ]
+    );
+
+    return {
+      updated: Boolean(result.rows[0]),
+      id: result.rows[0]?.id ?? normalizedAuditLogId
+    };
+  }
+
+  async listTcpAuditLogs(params?: {
+    imei?: string;
+    connection_id?: string;
+    direction?: string;
+    parse_status?: string;
+    ingest_status?: string;
+    keyword?: string;
+    start_at?: string;
+    end_at?: string;
+    cursor?: string;
+    limit?: number;
+  }) {
+    const filters: string[] = ['tenant_id = $1'];
+    const values: unknown[] = [TENANT_ID];
+
+    if (this.asString(params?.imei)) {
+      values.push(this.asString(params?.imei));
+      filters.push(`imei = $${values.length}`);
+    }
+    if (this.asString(params?.connection_id)) {
+      values.push(this.asString(params?.connection_id));
+      filters.push(`connection_id = $${values.length}`);
+    }
+    if (this.asString(params?.direction)) {
+      values.push(this.asString(params?.direction).toLowerCase());
+      filters.push(`lower(direction) = $${values.length}`);
+    }
+    if (this.asString(params?.parse_status)) {
+      values.push(this.asString(params?.parse_status).toLowerCase());
+      filters.push(`lower(parse_status) = $${values.length}`);
+    }
+    if (this.asString(params?.ingest_status)) {
+      values.push(this.asString(params?.ingest_status).toLowerCase());
+      filters.push(`lower(ingest_status) = $${values.length}`);
+    }
+    if (this.asString(params?.keyword)) {
+      values.push(`%${this.asString(params?.keyword)}%`);
+      filters.push(
+        `(coalesce(raw_frame_text, '') ilike $${values.length}
+          or coalesce(request_snapshot_json::text, '') ilike $${values.length}
+          or coalesce(ingest_error, '') ilike $${values.length})`
+      );
+    }
+
+    const startAt = this.toIsoTimestamp(this.asString(params?.start_at));
+    if (startAt) {
+      values.push(startAt);
+      filters.push(`created_at >= $${values.length}::timestamptz`);
+    }
+
+    const endAt = this.toIsoTimestamp(this.asString(params?.end_at));
+    if (endAt) {
+      values.push(endAt);
+      filters.push(`created_at <= $${values.length}::timestamptz`);
+    }
+
+    const cursor = this.parseTcpAuditCursor(params?.cursor);
+    if (cursor) {
+      values.push(cursor.createdAt);
+      const tsIndex = values.length;
+      values.push(cursor.id);
+      const idIndex = values.length;
+      filters.push(
+        `(created_at < $${tsIndex}::timestamptz
+          or (created_at = $${tsIndex}::timestamptz and id < $${idIndex}::uuid))`
+      );
+    }
+
+    const limit = Math.min(Math.max(Number(params?.limit ?? 50), 1), 100);
+    values.push(limit + 1);
+
+    const result = await this.db.query<TcpAuditLogRecord>(
+      `
+      select
+        id::text as id,
+        transport_type as "transportType",
+        direction as direction,
+        connection_id as "connectionId",
+        remote_addr as "remoteAddr",
+        remote_port as "remotePort",
+        imei as imei,
+        msg_type as "msgType",
+        protocol_version as "protocolVersion",
+        frame_size_bytes as "frameSizeBytes",
+        parse_status as "parseStatus",
+        ingest_status as "ingestStatus",
+        ingest_error as "ingestError",
+        raw_frame_text as "rawFrameText",
+        request_snapshot_json as "requestSnapshot",
+        created_at::text as "createdAt",
+        updated_at::text as "updatedAt"
+      from device_tcp_audit_log
+      where ${filters.join(' and ')}
+      order by created_at desc, id desc
+      limit $${values.length}
+      `,
+      values
+    );
+
+    const hasMore = result.rows.length > limit;
+    const items = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const nextCursor = hasMore
+      ? this.buildTcpAuditCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
+      : null;
+
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        transportType: row.transportType,
+        direction: row.direction,
+        connectionId: row.connectionId,
+        remoteAddr: row.remoteAddr,
+        remotePort: row.remotePort,
+        imei: row.imei,
+        msgType: row.msgType,
+        protocolVersion: row.protocolVersion,
+        frameSizeBytes: Number(row.frameSizeBytes ?? 0),
+        parseStatus: row.parseStatus,
+        ingestStatus: row.ingestStatus,
+        ingestError: row.ingestError,
+        rawFrameText: row.rawFrameText,
+        requestSnapshot: this.asObject(row.requestSnapshot),
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
+      })),
+      limit,
+      hasMore,
+      nextCursor
+    };
+  }
+
+  private async insertInteractionLogInClient(input: {
+    id?: string | null;
+    imei: string;
+    deviceId?: string | null;
+    connectionId?: string | null;
+    protocolVersion?: string | null;
+    direction: 'inbound' | 'outbound';
+    msgId?: string | null;
+    seqNo?: number | null;
+    msgType: string;
+    eventType?: string | null;
+    sessionRef?: string | null;
+    commandId?: string | null;
+    deviceTs?: string | null;
+    serverRxTs?: string | null;
+    idempotencyKey: string;
+    orderingKey: string;
+    integrityOk?: boolean | null;
+    clockDriftSec?: number | null;
+    payload: Record<string, unknown>;
+  }, client: PoolClient) {
+    const logId = this.asString(input.id) || randomUUID();
+    const artifacts = this.buildInteractionLogPayloadArtifacts(input.payload);
+    const serverRxTs = this.toIsoTimestamp(input.serverRxTs ?? null) ?? new Date().toISOString();
+
+    const dedup = await this.db.query<{ logId: string }>(
+      `
+      insert into device_message_log_v2_dedup (
+        tenant_id, idempotency_key, log_id, server_rx_ts
+      )
+      values ($1, $2, $3::uuid, $4::timestamptz)
+      on conflict (tenant_id, idempotency_key) do nothing
+      returning log_id::text as "logId"
+      `,
+      [TENANT_ID, input.idempotencyKey, logId, serverRxTs],
+      client
+    );
+    if (!dedup.rows[0]) {
+      const existing = await this.db.query<{ logId: string }>(
+        `
+        select log_id::text as "logId"
+        from device_message_log_v2_dedup
+        where tenant_id = $1
+          and idempotency_key = $2
+        limit 1
+        `,
+        [TENANT_ID, input.idempotencyKey],
+        client
+      );
+      return { duplicate: true, id: existing.rows[0]?.logId ?? null };
+    }
+
+    await this.db.query(
+      `
+      insert into device_message_log_v2 (
+        id, tenant_id, imei, device_id, connection_id, protocol_version, direction,
+        msg_id, seq_no, msg_type, event_type, session_ref, command_id, device_ts, server_rx_ts,
+        idempotency_key, ordering_key, integrity_ok, clock_drift_sec,
+        payload_json, payload_preview_json, payload_size_bytes, raw_body_text, raw_body_ref, storage_tier
+      )
+      values (
+        $1::uuid, $2, $3, $4::uuid, $5, $6, $7,
+        $8, $9, $10, $11, $12, $13::uuid, $14::timestamptz, $15::timestamptz,
+        $16, $17, $18, $19,
+        $20::jsonb, $21::jsonb, $22, $23, $24, $25
+      )
+      `,
+      [
+        logId,
+        TENANT_ID,
+        input.imei,
+        input.deviceId ?? null,
+        input.connectionId ?? null,
+        this.asString(input.protocolVersion) || this.getProtocolName(),
+        input.direction,
+        this.asString(input.msgId) || null,
+        input.seqNo ?? null,
+        input.msgType,
+        this.asString(input.eventType) || null,
+        this.asString(input.sessionRef) || null,
+        this.looksLikeUuid(input.commandId) ? input.commandId : null,
+        this.toIsoTimestamp(input.deviceTs ?? null),
+        serverRxTs,
+        input.idempotencyKey,
+        input.orderingKey,
+        input.integrityOk !== false,
+        input.clockDriftSec ?? null,
+        JSON.stringify(artifacts.payloadJson),
+        JSON.stringify(artifacts.payloadPreviewJson),
+        artifacts.payloadSizeBytes,
+        artifacts.rawBodyText,
+        artifacts.rawBodyRef,
+        artifacts.storageTier
       ],
       client
     );
 
     return {
-      duplicate: inserted.rows.length === 0,
-      id: inserted.rows[0]?.id ?? null
+      duplicate: false,
+      id: logId
+    };
+  }
+
+  private async insertMessageLog(event: DeviceRuntimeEvent, deviceId: string | null, client: PoolClient) {
+    return this.insertInteractionLogInClient(
+      {
+        imei: event.imei,
+        deviceId,
+        connectionId: `http:${event.imei}`,
+        protocolVersion: this.getProtocolName(),
+        direction: 'inbound',
+        msgId: event.msgId,
+        seqNo: event.seqNo,
+        msgType: event.msgType,
+        eventType: event.eventType,
+        sessionRef: event.sessionRef ?? null,
+        commandId: null,
+        deviceTs: this.toIsoTimestamp(event.deviceTs ?? null),
+        serverRxTs: this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
+        idempotencyKey: event.idempotencyKey,
+        orderingKey: event.orderingKey,
+        integrityOk: true,
+        clockDriftSec: event.clockDriftSec ?? null,
+        payload: {
+          event_type: event.eventType,
+          payload: event.payload,
+          counters: event.counters
+        }
+      },
+      client
+    );
+  }
+
+  private async attachInteractionLogCommandId(
+    logId: string | null | undefined,
+    commandId: string | null | undefined,
+    client: PoolClient
+  ) {
+    if (!this.looksLikeUuid(logId) || !this.looksLikeUuid(commandId)) {
+      return { updated: false };
+    }
+
+    const result = await this.db.query<{ id: string }>(
+      `
+      update device_message_log_v2
+      set command_id = $3::uuid
+      where tenant_id = $1
+        and id = $2::uuid
+        and (command_id is null or command_id <> $3::uuid)
+      returning id::text as id
+      `,
+      [TENANT_ID, logId, commandId],
+      client
+    );
+
+    return {
+      updated: Boolean(result.rows[0]),
+      id: result.rows[0]?.id ?? null
     };
   }
 
@@ -740,6 +2645,7 @@ export class DeviceGatewayService {
       this.asString(event.payload.run_state) ||
       device.runtimeState ||
       'idle';
+    const extPatch = this.buildDeviceExtPatch(event);
 
     await this.db.query(
       `
@@ -750,6 +2656,7 @@ export class DeviceGatewayService {
           online_state = $5,
           connection_state = 'connected',
           runtime_state = $6,
+          ext_json = coalesce(ext_json, '{}'::jsonb) || $7::jsonb,
           updated_at = now()
       where id = $1::uuid
       `,
@@ -759,7 +2666,8 @@ export class DeviceGatewayService {
         this.toIsoTimestamp(envelope.deviceTs),
         this.toIsoTimestamp(envelope.serverRxTs) ?? new Date().toISOString(),
         onlineState,
-        runtimeState
+        runtimeState,
+        JSON.stringify(extPatch)
       ],
       client
     );
@@ -833,7 +2741,7 @@ export class DeviceGatewayService {
             imei,
             device.id,
             this.asString(input.transportType) || 'tcp',
-            this.asString(input.protocolVersion) || 'tcp-json-v1',
+            this.asString(input.protocolVersion) || this.getProtocolName(),
             this.asString(input.remoteAddr) || null,
             input.remotePort ?? null,
             JSON.stringify({
@@ -862,7 +2770,7 @@ export class DeviceGatewayService {
             device.id,
             connectionId,
             this.asString(input.transportType) || 'tcp',
-            this.asString(input.protocolVersion) || 'tcp-json-v1',
+            this.asString(input.protocolVersion) || this.getProtocolName(),
             this.asString(input.remoteAddr) || null,
             input.remotePort ?? null,
             JSON.stringify({
@@ -884,6 +2792,17 @@ export class DeviceGatewayService {
         where id = $1::uuid
         `,
         [device.id, recoveredAt],
+        client
+      );
+
+      await this.runtimeIngestService.syncConnectionState(
+        {
+          tenantId: TENANT_ID,
+          device,
+          connectionState: 'connected',
+          onlineState: 'online',
+          lastEventAt: recoveredAt
+        },
         client
       );
 
@@ -956,6 +2875,7 @@ export class DeviceGatewayService {
       );
 
       if (!active.rows[0] && result.rows[0].deviceId) {
+        const device = await this.findDeviceById(result.rows[0].deviceId, client);
         await this.db.query(
           `
           update device
@@ -966,6 +2886,19 @@ export class DeviceGatewayService {
           [result.rows[0].deviceId],
           client
         );
+
+        if (device) {
+          await this.markPendingCardSwipeInterrupted(imei, client);
+          await this.runtimeIngestService.syncConnectionState(
+            {
+              tenantId: TENANT_ID,
+              device,
+              connectionState: 'disconnected',
+              lastEventAt: new Date().toISOString()
+            },
+            client
+          );
+        }
       }
 
       return {
@@ -1089,6 +3022,393 @@ export class DeviceGatewayService {
     }
   }
 
+  private extractWorkflowState(envelope: DeviceEnvelope, event: DeviceRuntimeEvent) {
+    const controllerState = this.asObject(event.payload.controller_state ?? event.payload.controllerState);
+    return this.asString(
+      controllerState.workflow_state ??
+        controllerState.workflowState ??
+        event.payload.workflow_state ??
+        event.payload.workflowState ??
+        event.payload.runtime_state ??
+        event.payload.runtimeState ??
+        event.payload.run_state ??
+        event.payload.runState ??
+        envelope.runState
+    ).toLowerCase();
+  }
+
+  private async completePendingStartIfNeeded(
+    session: ResolvedSession,
+    event: DeviceRuntimeEvent,
+    envelope: DeviceEnvelope,
+    commandDispatch: ResolvedCommandDispatch | null,
+    commandToken: string | null,
+    client: PoolClient
+  ) {
+    if (session.status !== 'pending_start') {
+      return null;
+    }
+
+    const commandCode =
+      commandDispatch?.commandCode?.toLowerCase() ??
+      this.asString(event.payload.command_code).toLowerCase();
+    const workflowState = this.extractWorkflowState(envelope, event);
+    const startedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && commandCode === 'start_session';
+    const startedByRuntime =
+      workflowState === 'running' ||
+      workflowState === 'billing' ||
+      workflowState === 'active';
+
+    if (!startedByAck && !startedByRuntime) {
+      return null;
+    }
+
+    const startedAt = this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString();
+    const result = await this.db.query<ResolvedSession>(
+      `
+      update runtime_session
+      set status = 'running',
+          billing_started_at = coalesce(billing_started_at, $2::timestamptz),
+          started_at = coalesce(started_at, $2::timestamptz),
+          updated_at = now()
+      where id = $1::uuid
+        and status = 'pending_start'
+      returning
+        id,
+        tenant_id as "tenantId",
+        session_no as "sessionNo",
+        session_ref as "sessionRef",
+        status
+      `,
+      [session.id, startedAt],
+      client
+    );
+    const started = result.rows[0] ?? null;
+    if (!started) {
+      return null;
+    }
+
+    await this.sessionStatusLogRepository.create(
+      {
+        tenantId: started.tenantId,
+        sessionId: started.id,
+        fromStatus: 'pending_start',
+        toStatus: 'running',
+        actionCode: 'start_session_completed',
+        reasonCode: startedByAck ? 'START_COMMAND_ACKED' : 'DEVICE_RUNTIME_RUNNING',
+        reasonText: startedByAck
+          ? 'session entered running after device acknowledged start command'
+          : 'session entered running after device reported running workflow state',
+        source: 'system',
+        snapshot: {
+          gateway_event_type: event.eventType,
+          gateway_msg_id: event.msgId,
+          gateway_seq_no: event.seqNo,
+          command_dispatch_id: commandDispatch?.id ?? null,
+          command_token: commandToken,
+          session_ref: started.sessionRef ?? event.sessionRef ?? null,
+          workflow_state: workflowState || null,
+          started_at: startedAt
+        }
+      },
+      client
+    );
+
+    return started;
+  }
+
+  private async failPendingStartSession(
+    session: ResolvedSession,
+    client: PoolClient,
+    input: {
+      endedAt?: string | null;
+      reasonCode: string;
+      reasonText: string;
+      gatewayEventType?: string | null;
+      gatewayEventCode?: string | null;
+      failureSource?: string | null;
+      failureMessage?: string | null;
+      snapshot?: Record<string, unknown>;
+    }
+  ) {
+    if (session.status !== 'pending_start') {
+      return null;
+    }
+
+    const endedAt = input.endedAt ?? new Date().toISOString();
+    const result = await this.db.query<ResolvedSession>(
+      `
+      update runtime_session
+      set status = 'ended',
+          ended_at = coalesce(ended_at, $2::timestamptz),
+          end_reason_code = $3,
+          updated_at = now()
+      where id = $1::uuid
+        and status = 'pending_start'
+      returning
+        id,
+        tenant_id as "tenantId",
+        session_no as "sessionNo",
+        session_ref as "sessionRef",
+        status
+      `,
+      [session.id, endedAt, input.reasonCode],
+      client
+    );
+    const ended = result.rows[0] ?? null;
+    if (!ended) {
+      return null;
+    }
+
+    await this.sessionStatusLogRepository.create(
+      {
+        tenantId: ended.tenantId,
+        sessionId: ended.id,
+        fromStatus: 'pending_start',
+        toStatus: 'ended',
+        actionCode: 'start_session_failed',
+        reasonCode: input.reasonCode,
+        reasonText: input.reasonText,
+        source: 'system',
+        snapshot: {
+          ended_at: endedAt,
+          session_ref: ended.sessionRef ?? null,
+          failure_source: input.failureSource ?? null,
+          failure_message: input.failureMessage ?? null,
+          gateway_event_type: input.gatewayEventType ?? null,
+          gateway_event_code: input.gatewayEventCode ?? null,
+          ...(input.snapshot ?? {})
+        }
+      },
+      client
+    );
+
+    const settled = await this.orderSettlementService.cancelOrderBeforeStart(ended.id, client, {
+      settledAt: endedAt,
+      gatewayEventType: input.gatewayEventType ?? null,
+      gatewayEventCode: input.gatewayEventCode ?? input.reasonCode,
+      failureSource: input.failureSource ?? 'device_gateway',
+      failureMessage: input.failureMessage ?? input.reasonText
+    });
+
+    if (settled) {
+      await this.sessionStatusLogRepository.create(
+        {
+          tenantId: ended.tenantId,
+          sessionId: ended.id,
+          fromStatus: 'ended',
+          toStatus: 'settled',
+          actionCode: 'start_failure_refunded',
+          reasonCode: input.reasonCode,
+          reasonText: 'irrigation order closed with full refund or unlock after start failure',
+          source: 'system',
+          snapshot: {
+            session_ref: ended.sessionRef ?? null,
+            order_id: settled.orderId,
+            amount: settled.amount,
+            refunded_amount: settled.refundedAmount,
+            settlement_status: settled.settlementStatus,
+            payment_status: settled.paymentStatus
+          }
+        },
+        client
+      );
+    }
+
+    return { session: ended, order: settled };
+  }
+
+  private async failPendingStartFromNackIfNeeded(
+    session: ResolvedSession,
+    event: DeviceRuntimeEvent,
+    commandDispatch: ResolvedCommandDispatch | null,
+    commandToken: string | null,
+    client: PoolClient
+  ) {
+    const commandCode =
+      commandDispatch?.commandCode?.toLowerCase() ??
+      this.asString(event.payload.command_code).toLowerCase();
+    if (
+      session.status !== 'pending_start' ||
+      event.eventType !== 'DEVICE_COMMAND_NACKED' ||
+      !['start_session', 'start_pump', 'open_valve'].includes(commandCode)
+    ) {
+      return null;
+    }
+
+    const reasonCode =
+      this.asString(event.payload.reason_code) ||
+      this.asString(event.payload.event_code) ||
+      this.asString(event.payload.code) ||
+      'start_command_nack';
+    const reasonText =
+      this.asString(event.payload.reason_text) ||
+      this.asString(event.payload.reason) ||
+      this.asString(event.payload.message) ||
+      'device rejected the start command';
+
+    return this.failPendingStartSession(session, client, {
+      endedAt: this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString(),
+      reasonCode,
+      reasonText: `device rejected synchronous start workflow command: ${reasonText}`,
+      gatewayEventType: event.eventType,
+      gatewayEventCode: reasonCode,
+      failureSource: 'device_nack',
+      failureMessage: reasonText,
+      snapshot: {
+        gateway_msg_id: event.msgId,
+        gateway_seq_no: event.seqNo,
+        command_dispatch_id: commandDispatch?.id ?? null,
+        command_token: commandToken
+      }
+    });
+  }
+
+  private async completePauseResumeIfNeeded(
+    session: ResolvedSession,
+    event: DeviceRuntimeEvent,
+    envelope: DeviceEnvelope,
+    commandDispatch: ResolvedCommandDispatch | null,
+    commandToken: string | null,
+    client: PoolClient
+  ) {
+    const workflowState = this.extractWorkflowState(envelope, event);
+    const actionCode = this.resolveWorkflowActionCode(commandDispatch, event);
+    const pausedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && actionCode === 'pause_session';
+    const resumedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && actionCode === 'resume_session';
+    const pausedByRuntime = workflowState === 'paused';
+    const resumedByRuntime = workflowState === 'running' || workflowState === 'billing' || workflowState === 'active';
+
+    if (
+      (session.status === 'pausing' || session.status === 'running' || session.status === 'billing') &&
+      (pausedByAck || pausedByRuntime)
+    ) {
+      const pausedAt = this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString();
+      const pausedResult = await this.db.query<ResolvedSession>(
+        `
+        update runtime_session
+        set status = 'paused',
+            updated_at = now()
+        where id = $1::uuid
+          and status = any($2::text[])
+        returning
+          id,
+          tenant_id as "tenantId",
+          session_no as "sessionNo",
+          session_ref as "sessionRef",
+          status
+        `,
+        [session.id, ['pausing', 'running', 'billing']],
+        client
+      );
+      const paused = pausedResult.rows[0] ?? null;
+      if (!paused) {
+        return null;
+      }
+
+      await this.orderSettlementService.markPauseConfirmed(paused.id, client, {
+        pausedAt,
+        reasonCode: pausedByAck ? 'PAUSE_COMMAND_ACKED' : 'DEVICE_RUNTIME_PAUSED',
+        reasonText: pausedByAck
+          ? 'session entered paused after device acknowledged pause command'
+          : 'session entered paused after device reported paused workflow state',
+        source: 'device_gateway'
+      });
+
+      await this.sessionStatusLogRepository.create(
+        {
+          tenantId: paused.tenantId,
+          sessionId: paused.id,
+          fromStatus: session.status,
+          toStatus: 'paused',
+          actionCode: pausedByAck ? 'pause_session_completed' : 'device_runtime_paused',
+          reasonCode: pausedByAck ? 'PAUSE_COMMAND_ACKED' : 'DEVICE_RUNTIME_PAUSED',
+          reasonText: pausedByAck
+            ? 'session entered paused after device acknowledged pause command'
+            : 'session entered paused after device reported paused workflow state',
+          source: 'system',
+          snapshot: {
+            gateway_event_type: event.eventType,
+            gateway_msg_id: event.msgId,
+            gateway_seq_no: event.seqNo,
+            command_dispatch_id: commandDispatch?.id ?? null,
+            command_token: commandToken,
+            session_ref: paused.sessionRef ?? event.sessionRef ?? null,
+            workflow_state: workflowState || null,
+            paused_at: pausedAt
+          }
+        },
+        client
+      );
+
+      return paused;
+    }
+
+    if ((session.status === 'resuming' || session.status === 'paused') && (resumedByAck || resumedByRuntime)) {
+      const resumedAt = this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString();
+      const resumedResult = await this.db.query<ResolvedSession>(
+        `
+        update runtime_session
+        set status = 'running',
+            updated_at = now()
+        where id = $1::uuid
+          and status = any($2::text[])
+        returning
+          id,
+          tenant_id as "tenantId",
+          session_no as "sessionNo",
+          session_ref as "sessionRef",
+          status
+        `,
+        [session.id, ['resuming', 'paused']],
+        client
+      );
+      const resumed = resumedResult.rows[0] ?? null;
+      if (!resumed) {
+        return null;
+      }
+
+      await this.orderSettlementService.markResumedFromPause(resumed.id, client, {
+        resumedAt,
+        reasonCode: resumedByAck ? 'RESUME_COMMAND_ACKED' : 'DEVICE_RUNTIME_RUNNING',
+        reasonText: resumedByAck
+          ? 'session resumed after device acknowledged resume command'
+          : 'session resumed after device reported running workflow state',
+        source: 'device_gateway'
+      });
+
+      await this.sessionStatusLogRepository.create(
+        {
+          tenantId: resumed.tenantId,
+          sessionId: resumed.id,
+          fromStatus: session.status,
+          toStatus: 'running',
+          actionCode: resumedByAck ? 'resume_session_completed' : 'device_runtime_resumed',
+          reasonCode: resumedByAck ? 'RESUME_COMMAND_ACKED' : 'DEVICE_RUNTIME_RUNNING',
+          reasonText: resumedByAck
+            ? 'session resumed after device acknowledged resume command'
+            : 'session resumed after device reported running workflow state',
+          source: 'system',
+          snapshot: {
+            gateway_event_type: event.eventType,
+            gateway_msg_id: event.msgId,
+            gateway_seq_no: event.seqNo,
+            command_dispatch_id: commandDispatch?.id ?? null,
+            command_token: commandToken,
+            session_ref: resumed.sessionRef ?? event.sessionRef ?? null,
+            workflow_state: workflowState || null,
+            resumed_at: resumedAt
+          }
+        },
+        client
+      );
+
+      return resumed;
+    }
+
+    return null;
+  }
+
   private estimateSettledAmount(mode: string, unitPrice: number, minChargeAmount: number, durationSec: number) {
     if (mode === 'duration') {
       return Math.max(minChargeAmount, Math.ceil(durationSec / 60) * unitPrice);
@@ -1134,6 +3454,35 @@ export class DeviceGatewayService {
     };
   }
 
+  private extractStopEventCode(event: DeviceRuntimeEvent) {
+    return (
+      this.asString(event.payload.event_code) ||
+      this.asString(event.payload.stop_reason_code) ||
+      this.asString(event.payload.reason_code) ||
+      this.asString(event.payload.code) ||
+      (event.eventType === 'DEVICE_RUNTIME_STOPPED' ? 'device_runtime_stopped' : '')
+    ).toLowerCase();
+  }
+
+  private isAbnormalStopEvent(event: DeviceRuntimeEvent, stopEventCode: string) {
+    if (this.asBoolean(event.payload.abnormal_stop)) {
+      return true;
+    }
+
+    const powerState = this.asString(event.payload.power_state ?? event.payload.powerState).toLowerCase();
+    if (powerState === 'off' || powerState === 'power_loss') {
+      return true;
+    }
+
+    return (
+      stopEventCode.includes('power') ||
+      stopEventCode.includes('fault') ||
+      stopEventCode.includes('alarm') ||
+      stopEventCode.includes('abnormal') ||
+      stopEventCode.includes('emergency')
+    );
+  }
+
   private async completeStoppingSessionIfNeeded(
     session: ResolvedSession,
     event: DeviceRuntimeEvent,
@@ -1144,18 +3493,45 @@ export class DeviceGatewayService {
     const commandCode =
       commandDispatch?.commandCode?.toLowerCase() ??
       this.asString(event.payload.command_code).toLowerCase();
-    const shouldComplete =
+    const stopEventCode = this.extractStopEventCode(event);
+    const normalStopClosure =
       session.status === 'stopping' &&
       (event.eventType === 'DEVICE_RUNTIME_STOPPED' ||
         (event.eventType === 'DEVICE_COMMAND_ACKED' && commandCode === 'stop_session'));
+    const unexpectedRuntimeStop =
+      event.eventType === 'DEVICE_RUNTIME_STOPPED' &&
+      ['pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming'].includes(session.status);
+    const shouldComplete = normalStopClosure || unexpectedRuntimeStop;
 
     if (!shouldComplete) {
       return null;
     }
 
     const endedAt = this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs) ?? new Date().toISOString();
-    const endReasonCode =
-      event.eventType === 'DEVICE_RUNTIME_STOPPED' ? 'device_runtime_stopped' : 'stop_command_acked';
+    const endReasonCode = stopEventCode || (event.eventType === 'DEVICE_RUNTIME_STOPPED' ? 'device_runtime_stopped' : 'stop_command_acked');
+    const abnormalStop = this.isAbnormalStopEvent(event, endReasonCode);
+    const completionSourceStatus = session.status;
+    if (completionSourceStatus === 'pending_start') {
+      return this.failPendingStartSession(session, client, {
+        endedAt,
+        reasonCode: endReasonCode,
+        reasonText: 'session ended before start completed after device runtime stop event',
+        gatewayEventType: event.eventType,
+        gatewayEventCode: stopEventCode || endReasonCode,
+        failureSource: 'device_runtime_stop',
+        failureMessage: stopEventCode || endReasonCode,
+        snapshot: {
+          gateway_msg_id: event.msgId,
+          gateway_seq_no: event.seqNo,
+          command_dispatch_id: commandDispatch?.id ?? null,
+          command_token: commandToken,
+          abnormal_stop: abnormalStop
+        }
+      });
+    }
+    const allowedStatuses = unexpectedRuntimeStop
+      ? ['pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming']
+      : ['stopping'];
     const stoppedResult = await this.db.query<{
       id: string;
       tenantId: string;
@@ -1175,7 +3551,7 @@ export class DeviceGatewayService {
           end_reason_code = $3,
           updated_at = now()
       where id = $1::uuid
-        and status = 'stopping'
+        and status = any($4::text[])
       returning
         id,
         tenant_id as "tenantId",
@@ -1188,7 +3564,7 @@ export class DeviceGatewayService {
         started_at as "startedAt",
         ended_at as "endedAt"
       `,
-      [session.id, endedAt, endReasonCode],
+      [session.id, endedAt, endReasonCode, allowedStatuses],
       client
     );
 
@@ -1201,20 +3577,24 @@ export class DeviceGatewayService {
       {
         tenantId: stopped.tenantId,
         sessionId: stopped.id,
-        fromStatus: 'stopping',
+        fromStatus: completionSourceStatus,
         toStatus: 'ended',
-        actionCode: 'stop_session_completed',
-        reasonCode: event.eventType,
-        reasonText: 'session stop completed after device acknowledgement',
+        actionCode: unexpectedRuntimeStop ? 'device_runtime_stop_completed' : 'stop_session_completed',
+        reasonCode: endReasonCode,
+        reasonText: unexpectedRuntimeStop
+          ? 'session ended after device runtime stop event'
+          : 'session stop completed after device acknowledgement',
         source: 'system',
         snapshot: {
           gateway_event_type: event.eventType,
+          gateway_event_code: stopEventCode || null,
           gateway_msg_id: event.msgId,
           gateway_seq_no: event.seqNo,
           command_dispatch_id: commandDispatch?.id ?? null,
           command_token: commandToken,
           session_ref: stopped.sessionRef ?? event.sessionRef ?? null,
-          ended_at: stopped.endedAt
+          ended_at: stopped.endedAt,
+          abnormal_stop: abnormalStop
         }
       },
       client
@@ -1225,31 +3605,12 @@ export class DeviceGatewayService {
       return { stopped, order };
     }
 
-    const startedAt = new Date(stopped.startedAt);
-    const endedAtDate = new Date(stopped.endedAt);
-    const durationSec = Math.max(1, Math.ceil((endedAtDate.getTime() - startedAt.getTime()) / 1000));
-    const pricingSnapshot = (order.pricingSnapshot ?? {}) as Record<string, any>;
-    const unitPrice = Number(pricingSnapshot.unitPrice ?? 0);
-    const minChargeAmount = Number(pricingSnapshot.minChargeAmount ?? 0);
-    const mode = String(pricingSnapshot.mode ?? 'duration');
-    const amount = this.estimateSettledAmount(mode, unitPrice, minChargeAmount, durationSec);
-    const finalized = await this.orderRepository.finalize(
-      {
-        orderId: order.id,
-        chargeDurationSec: durationSec,
-        amount,
-        pricingSnapshot: {
-          ...pricingSnapshot,
-          breakdown: [
-            { item: 'runtime_duration_seconds', value: durationSec },
-            { item: 'amount', value: amount },
-            { item: 'settled_via', value: 'device_gateway_ack' }
-          ]
-        },
-        pricingDetail: this.buildSettledPricingDetail(order.pricingDetail ?? {}, pricingSnapshot, durationSec, amount)
-      },
-      client
-    );
+    const finalized = await this.orderSettlementService.finalizeOrderAfterStop(stopped.id, client, {
+      settledAt: stopped.endedAt,
+      gatewayEventType: event.eventType,
+      gatewayEventCode: stopEventCode || null,
+      abnormalStop
+    });
 
     await this.sessionStatusLogRepository.create(
       {
@@ -1259,28 +3620,25 @@ export class DeviceGatewayService {
         toStatus: 'settled',
         actionCode: 'settle_success',
         reasonCode: 'ORDER_SETTLED',
-        reasonText: 'irrigation order settled after device acknowledgement',
+        reasonText: unexpectedRuntimeStop
+          ? 'irrigation order settled after unexpected device stop'
+          : 'irrigation order settled after device acknowledgement',
         source: 'system',
         snapshot: {
           orderId: order.id,
-          finalAmount: finalized.amount,
+          finalAmount: finalized?.amount ?? Number(order.amount ?? 0),
+          refundedAmount: finalized?.refundedAmount ?? 0,
           gateway_event_type: event.eventType,
+          gateway_event_code: stopEventCode || null,
           gateway_msg_id: event.msgId,
-          session_ref: stopped.sessionRef ?? event.sessionRef ?? null
+          session_ref: stopped.sessionRef ?? event.sessionRef ?? null,
+          abnormal_stop: abnormalStop
         }
       },
       client
     );
 
-    await this.farmerFundService.debitForSettledOrder(client, {
-      tenantId: order.tenantId,
-      userId: order.userId,
-      orderId: order.id,
-      amount,
-      fundingMode: order.fundingMode
-    });
-
-    return { stopped, order: finalized };
+    return { stopped, order: finalized ?? order };
   }
 
   private async updateCommandDispatch(
@@ -1289,10 +3647,12 @@ export class DeviceGatewayService {
     deviceCommand: ResolvedDeviceCommand | null,
     client: PoolClient
   ) {
+    const isPositiveCommandClosure =
+      event.eventType === 'DEVICE_COMMAND_ACKED' || event.eventType === 'DEVICE_QUERY_RESULT';
     const nackTransition =
       event.eventType === 'DEVICE_COMMAND_NACKED' && deviceCommand ? this.resolveNackTransition(deviceCommand, event) : null;
     const nextStatus =
-      event.eventType === 'DEVICE_COMMAND_ACKED'
+      isPositiveCommandClosure
         ? 'acked'
         : event.eventType === 'DEVICE_COMMAND_NACKED'
           ? nackTransition?.dispatchStatus ?? 'nack'
@@ -1311,7 +3671,7 @@ export class DeviceGatewayService {
       [
         commandDispatch.id,
         nextStatus,
-        event.eventType === 'DEVICE_COMMAND_ACKED' || event.eventType === 'DEVICE_COMMAND_NACKED',
+        isPositiveCommandClosure || event.eventType === 'DEVICE_COMMAND_NACKED',
         this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
         nextStatus === 'retry_pending',
         JSON.stringify(this.buildGatewayResponsePayload(event, nackTransition?.transportPatch))
@@ -1326,9 +3686,11 @@ export class DeviceGatewayService {
     event: DeviceRuntimeEvent,
     client: PoolClient
   ) {
+    const isPositiveCommandClosure =
+      event.eventType === 'DEVICE_COMMAND_ACKED' || event.eventType === 'DEVICE_QUERY_RESULT';
     const nackTransition = event.eventType === 'DEVICE_COMMAND_NACKED' ? this.resolveNackTransition(deviceCommand, event) : null;
     const nextStatus =
-      event.eventType === 'DEVICE_COMMAND_ACKED'
+      isPositiveCommandClosure
         ? 'acked'
         : event.eventType === 'DEVICE_COMMAND_NACKED'
           ? nackTransition?.deviceCommandStatus ?? 'failed'
@@ -1363,7 +3725,7 @@ export class DeviceGatewayService {
         nextStatus,
         event.msgId,
         event.seqNo,
-        event.eventType === 'DEVICE_COMMAND_ACKED',
+        isPositiveCommandClosure,
         this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
         nextStatus === 'failed' || nextStatus === 'dead_letter',
         nextStatus === 'retry_pending',
@@ -1431,7 +3793,7 @@ export class DeviceGatewayService {
       from runtime_session rs
       where rs.tenant_id = $1
         and rs.device_key = $2
-        and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+        and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
       order by rs.updated_at desc, rs.created_at desc
       `,
       [TENANT_ID, imei],
@@ -1862,15 +4224,14 @@ export class DeviceGatewayService {
     });
 
     const event = await this.ingestRuntimeEvent({
-      protocolVersion: 'http-json-v1',
-      imei,
-      msgId: this.asString(input.msg_id) || `bridge-heartbeat-${bridgeId}-${Date.now()}`,
-      msgType: 'HEARTBEAT',
-      seqNo: input.seq_no ?? Number(String(Date.now()).slice(-6)),
-      deviceTs: this.toIsoTimestamp(this.asString(input.device_ts)) ?? new Date().toISOString(),
-      serverRxTs: new Date().toISOString(),
-      sessionRef: this.asString(input.session_ref) || null,
-      payload: {
+      v: 1,
+      t: 'HB',
+      i: imei,
+      m: this.asString(input.msg_id) || `bridge-heartbeat-${bridgeId}-${Date.now()}`,
+      s: input.seq_no ?? Number(String(Date.now()).slice(-6)),
+      r: this.asString(input.session_ref) || null,
+      ts: this.toIsoTimestamp(this.asString(input.device_ts)) ?? new Date().toISOString(),
+      p: {
         bridge_id: bridgeId,
         transport_mode: 'http_bridge',
         ...(this.asObject(input.payload))
@@ -2015,28 +4376,84 @@ export class DeviceGatewayService {
       };
     }
 
-    const transportPatch = this.buildConnectionRecoveryTransportPatch(recovery);
     const commandIds: string[] = [];
     const commandTokens: string[] = [];
 
     for (const row of result.rows) {
+      const synchronousStartCommand = this.isSynchronousStartCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const synchronousWorkflowControlCommand = this.isSynchronousWorkflowControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonReplayableRealtimeControlCommand = this.isNonReplayableRealtimeControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonRetryableControlCommand = synchronousStartCommand || synchronousWorkflowControlCommand;
+      const nextStatus = nonRetryableControlCommand || nonReplayableRealtimeControlCommand ? 'dead_letter' : 'created';
+      const transportPatch = nonRetryableControlCommand || nonReplayableRealtimeControlCommand
+        ? {
+            retry_count: this.getRetryCount(row.responsePayload),
+            retryable: false,
+            next_retry_at: null,
+            retry_delay_seconds: null,
+            last_transition: synchronousStartCommand
+              ? 'sync_start_reconnect_closed'
+              : synchronousWorkflowControlCommand
+                ? 'sync_workflow_control_reconnect_closed'
+                : 'realtime_control_reconnect_closed',
+            dead_letter_reason: synchronousStartCommand
+              ? 'sync_start_reconnect_blocked'
+              : synchronousWorkflowControlCommand
+                ? 'sync_workflow_control_reconnect_blocked'
+                : 'realtime_control_reconnect_blocked',
+            reconnect_detected_at: this.toIsoTimestamp(recovery.serverRxTs) ?? new Date().toISOString()
+          }
+        : this.buildConnectionRecoveryTransportPatch(recovery);
+
       await this.db.query(
         `
         update device_command
-        set command_status = 'created',
+        set command_status = $2::varchar,
             sent_at = null,
             acked_at = null,
-            failed_at = null,
+            failed_at = case when $2::varchar = 'dead_letter' then now() else null end,
             timeout_at = null,
-            response_payload_json = $2::jsonb,
+            response_payload_json = $3::jsonb,
             updated_at = now()
         where id = $1::uuid
         `,
-        [row.id, JSON.stringify(this.mergeTransportPayload(row.responsePayload, transportPatch))],
+        [row.id, nextStatus, JSON.stringify(this.mergeTransportPayload(row.responsePayload, transportPatch))],
         client
       );
 
-      await this.updateDispatchStatusByCommandToken(row.commandToken, 'created', transportPatch, client);
+      await this.updateDispatchStatusByCommandToken(row.commandToken, nextStatus, transportPatch, client);
+
+      if (synchronousStartCommand) {
+        const session = await this.resolveSession(row.sessionRef ?? null, row.sessionId ?? null, client);
+        if (session) {
+          await this.failPendingStartSession(session, client, {
+            endedAt: this.toIsoTimestamp(recovery.serverRxTs) ?? new Date().toISOString(),
+            reasonCode: 'sync_start_reconnect_blocked',
+            reasonText: 'synchronous start command was not reactivated after reconnect',
+            gatewayEventType: recovery.eventType,
+            gatewayEventCode: 'sync_start_reconnect_blocked',
+            failureSource: 'connection_recovered',
+            failureMessage: 'startup command remained closed after reconnect to prevent delayed auto-start',
+            snapshot: {
+              command_id: row.id,
+              command_token: row.commandToken,
+              command_code: row.commandCode,
+              reconnect_msg_id: recovery.msgId
+            }
+          });
+        }
+        continue;
+      }
+
       commandIds.push(row.id);
       commandTokens.push(row.commandToken);
     }
@@ -2045,6 +4462,158 @@ export class DeviceGatewayService {
       reactivatedCount: commandIds.length,
       commandIds,
       commandTokens
+    };
+  }
+
+  private async closeDisconnectedPendingControlCommands(
+    imei: string,
+    disconnectedAt: string,
+    client: PoolClient
+  ) {
+    const result = await this.db.query<DeviceCommandQueueRow>(
+      `
+      select
+        dc.id,
+        dc.command_id::text as "commandToken",
+        dc.command_code as "commandCode",
+        dc.command_status as "commandStatus",
+        dc.target_device_id as "targetDeviceId",
+        dc.imei,
+        dc.session_id as "sessionId",
+        dc.session_ref as "sessionRef",
+        dc.start_token as "startToken",
+        dc.sent_at as "sentAt",
+        dc.acked_at as "ackedAt",
+        dc.failed_at as "failedAt",
+        dc.timeout_at as "timeoutAt",
+        dc.request_payload_json as "requestPayload",
+        dc.response_payload_json as "responsePayload"
+      from device_command dc
+      where dc.tenant_id = $1
+        and dc.imei = $2
+        and dc.command_status in ('created', 'retry_pending')
+      order by dc.created_at asc
+      limit 100
+      `,
+      [TENANT_ID, imei],
+      client
+    );
+
+    let deadLettered = 0;
+    let startClosed = 0;
+    let stopReviewQueued = 0;
+
+    for (const row of result.rows) {
+      const synchronousStartCommand = this.isSynchronousStartCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const synchronousWorkflowControlCommand = this.isSynchronousWorkflowControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonReplayableRealtimeControlCommand = this.isNonReplayableRealtimeControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const sessionStopCommand = this.isSessionStopCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+
+      if (
+        !synchronousStartCommand &&
+        !synchronousWorkflowControlCommand &&
+        !sessionStopCommand &&
+        !nonReplayableRealtimeControlCommand
+      ) {
+        continue;
+      }
+
+      const transportPatch = {
+        retry_count: this.getRetryCount(row.responsePayload),
+        retryable: false,
+        next_retry_at: null,
+        retry_delay_seconds: null,
+        last_transition: synchronousStartCommand
+          ? 'sync_start_disconnect_closed'
+          : synchronousWorkflowControlCommand
+            ? 'sync_workflow_control_disconnect_closed'
+            : sessionStopCommand
+              ? 'session_stop_disconnect_review'
+              : 'realtime_control_disconnect_closed',
+        dead_letter_reason: synchronousStartCommand
+          ? 'sync_start_device_disconnected'
+          : synchronousWorkflowControlCommand
+            ? 'sync_workflow_control_device_disconnected'
+            : sessionStopCommand
+              ? 'session_stop_device_disconnected'
+              : 'realtime_control_device_disconnected',
+        disconnected_at: disconnectedAt
+      };
+
+      await this.db.query(
+        `
+        update device_command
+        set command_status = 'dead_letter',
+            sent_at = null,
+            acked_at = null,
+            failed_at = coalesce(failed_at, now()),
+            timeout_at = now(),
+            response_payload_json = $2::jsonb,
+            updated_at = now()
+        where id = $1::uuid
+        `,
+        [row.id, JSON.stringify(this.mergeTransportPayload(row.responsePayload, transportPatch))],
+        client
+      );
+
+      await this.updateDispatchStatusByCommandToken(row.commandToken, 'dead_letter', transportPatch, client);
+      deadLettered += 1;
+
+      if (synchronousStartCommand) {
+        const session = await this.resolveSession(row.sessionRef ?? null, row.sessionId ?? null, client);
+        if (session) {
+          await this.failPendingStartSession(session, client, {
+            endedAt: disconnectedAt,
+            reasonCode: 'sync_start_device_disconnected',
+            reasonText: 'device disconnected before synchronous start command could be completed',
+            gatewayEventType: 'DEVICE_CONNECTION_INTERRUPTED',
+            gatewayEventCode: 'sync_start_device_disconnected',
+            failureSource: 'connection_sweep',
+            failureMessage: 'device disconnected while synchronous start command was still pending',
+            snapshot: {
+              command_id: row.id,
+              command_token: row.commandToken,
+              command_code: row.commandCode
+            }
+          });
+          startClosed += 1;
+        }
+        continue;
+      }
+
+      if (sessionStopCommand) {
+        const session = await this.resolveSession(row.sessionRef ?? null, row.sessionId ?? null, client);
+        if (session) {
+          await this.orderSettlementService.markStopPendingReview(session.id, client, {
+            reviewAt: disconnectedAt,
+            reasonCode: 'device_disconnected_before_stop_dispatch',
+            reasonText: 'stop command was closed because the device disconnected before acknowledgement',
+            source: 'device_gateway_connection_sweep',
+            commandId: row.id,
+            commandToken: row.commandToken,
+            commandCode: row.commandCode
+          });
+          stopReviewQueued += 1;
+        }
+      }
+    }
+
+    return {
+      deadLettered,
+      startClosed,
+      stopReviewQueued
     };
   }
 
@@ -2314,6 +4883,7 @@ export class DeviceGatewayService {
         },
         client
       );
+      const skipRuntimeIngest = this.isCardSwipeMetadataEvent(event);
 
       let commandDispatch = await this.resolveCommandDispatchById(event.commandId ?? null, client);
       const deviceCommand = commandDispatch
@@ -2365,19 +4935,82 @@ export class DeviceGatewayService {
         deviceCommand ??
         (commandDispatch ? await this.resolveDeviceCommandByDispatch(commandDispatch.id, client) : null);
 
+      await this.attachInteractionLogCommandId(messageLog.id ?? null, matchedDeviceCommand?.id ?? null, client);
+
       if (session) {
         await this.touchRuntimeSession(session, event, envelope, commandDispatch, effectiveCommandToken, client);
       }
 
+      const runtimeHealthStatus = await this.runtimeIngestService.syncHealthState(
+        {
+          tenantId: TENANT_ID,
+          device,
+          envelope,
+          event
+        },
+        client
+      );
+      await this.syncCardSwipeOutcomeFromEvent(event, client);
+
       const dispatchUpdate = commandDispatch ? await this.updateCommandDispatch(commandDispatch, event, matchedDeviceCommand, client) : null;
       const deviceCommandUpdate =
-        matchedDeviceCommand && (event.eventType === 'DEVICE_COMMAND_ACKED' || event.eventType === 'DEVICE_COMMAND_NACKED')
+        matchedDeviceCommand &&
+        (
+          event.eventType === 'DEVICE_COMMAND_ACKED' ||
+          event.eventType === 'DEVICE_COMMAND_NACKED' ||
+          event.eventType === 'DEVICE_QUERY_RESULT'
+        )
           ? await this.updateDeviceCommand(matchedDeviceCommand, event, client)
           : null;
+
+      if (!skipRuntimeIngest) {
+        await this.runtimeIngestService.syncDerivedState(
+          {
+            tenantId: TENANT_ID,
+            device,
+            envelope,
+            event,
+            lastCommandId: matchedDeviceCommand?.id ?? null
+          },
+          client
+        );
+      }
+
       if (session) {
+        const started = await this.completePendingStartIfNeeded(
+          session,
+          event,
+          envelope,
+          commandDispatch,
+          effectiveCommandToken,
+          client
+        );
+        if (started) {
+          session = started;
+        }
+
+        const failedStart = await this.failPendingStartFromNackIfNeeded(
+          session,
+          event,
+          commandDispatch,
+          effectiveCommandToken,
+          client
+        );
+        if (failedStart?.session) {
+          session = failedStart.session;
+        }
+
+        await this.completePauseResumeIfNeeded(session, event, envelope, commandDispatch, effectiveCommandToken, client);
         await this.completeStoppingSessionIfNeeded(session, event, commandDispatch, effectiveCommandToken, client);
       }
       const alarm = event.eventType === 'DEVICE_ALARM_RAISED' ? await this.createAlarm(device.id, session?.id ?? null, event, client) : null;
+
+      const orderProgress = session
+        ? await this.orderSettlementService.syncProgressBySessionId(session.id, { client }).catch(() => null)
+        : null;
+      const cardSwipeBridge = this.isCardSwipeRequestedEvent(event)
+        ? await this.bridgeCardSwipeRequestedEvent(event, client)
+        : null;
 
       return {
         ingested: true,
@@ -2413,13 +5046,89 @@ export class DeviceGatewayService {
             }
           : null,
         alarm: alarm ? { id: alarm.id } : null,
+        order_progress:
+          orderProgress && !('skipped' in orderProgress)
+            ? {
+                order_id: orderProgress.orderId,
+                amount: orderProgress.amount,
+                credit_limit_reached: orderProgress.creditLimitReached
+              }
+            : null,
+        card_swipe: cardSwipeBridge
+          ? {
+              handled: cardSwipeBridge.handled,
+              accepted: cardSwipeBridge.accepted,
+              action: cardSwipeBridge.action,
+              session_id: cardSwipeBridge.sessionId,
+              session_ref: cardSwipeBridge.sessionRef,
+              order_id: cardSwipeBridge.orderId,
+              awaiting_device_ack: cardSwipeBridge.awaitingDeviceAck,
+              prompt_code: cardSwipeBridge.promptCode,
+              error_code: cardSwipeBridge.errorCode,
+              error_message: cardSwipeBridge.errorMessage,
+              queued_command_count: cardSwipeBridge.queuedCommandCount
+            }
+          : null,
         auto_closed_work_orders: connectionRecovery.autoClosedOfflineWorkOrders.closedWorkOrderIds,
         recovery: {
           resolved_offline_alarm_ids: connectionRecovery.resolvedOfflineAlarmIds,
           reactivated_retry_command_ids: connectionRecovery.reactivatedRetryCommands.commandIds,
           reactivated_retry_command_tokens: connectionRecovery.reactivatedRetryCommands.commandTokens
-        }
+        },
+        runtime_health: runtimeHealthStatus
+          ? {
+              online_state: runtimeHealthStatus.onlineState,
+              is_online: runtimeHealthStatus.isOnline,
+              last_seen_at: runtimeHealthStatus.lastSeenAt,
+              last_heartbeat_at: runtimeHealthStatus.lastHeartbeatAt,
+              current_boot_session_id: runtimeHealthStatus.currentBootSessionId,
+              health_flags: runtimeHealthStatus.healthFlags
+            }
+          : null
       };
+    });
+  }
+
+  async getRuntimeShadow(imei: string) {
+    return this.runtimeIngestService.getRuntimeShadowByImei(TENANT_ID, this.asString(imei));
+  }
+
+  async listRuntimeShadows(input: {
+    project_id?: string;
+    block_id?: string;
+    imei?: string;
+    limit?: number;
+  }) {
+    const projectId = this.asString(input.project_id);
+    const blockId = this.asString(input.block_id);
+    return this.runtimeIngestService.listRuntimeShadows({
+      tenantId: TENANT_ID,
+      projectId: this.looksLikeUuid(projectId) ? projectId : undefined,
+      blockId: this.looksLikeUuid(blockId) ? blockId : undefined,
+      imei: this.asString(input.imei) || undefined,
+      limit: input.limit
+    });
+  }
+
+  async listChannelLatest(input: {
+    device_id?: string;
+    imei?: string;
+    project_id?: string;
+    block_id?: string;
+    metric_code?: string;
+    limit?: number;
+  }) {
+    const deviceId = this.asString(input.device_id);
+    const projectId = this.asString(input.project_id);
+    const blockId = this.asString(input.block_id);
+    return this.runtimeIngestService.listChannelLatest({
+      tenantId: TENANT_ID,
+      deviceId: this.looksLikeUuid(deviceId) ? deviceId : undefined,
+      imei: this.asString(input.imei) || undefined,
+      projectId: this.looksLikeUuid(projectId) ? projectId : undefined,
+      blockId: this.looksLikeUuid(blockId) ? blockId : undefined,
+      metricCode: this.asString(input.metric_code) || undefined,
+      limit: input.limit
     });
   }
 
@@ -2472,6 +5181,8 @@ export class DeviceGatewayService {
       imei: this.asString(input.imei) || device.imei,
       target_device_id: device.id
     };
+    const requestMsgId = this.asString(input.request_msg_id) || this.buildDefaultRequestMsgId(commandToken);
+    const requestSeqNo = this.asNumber(input.request_seq_no) ?? this.buildDefaultRequestSeqNo(commandToken);
 
     const insertedCommand = await this.db.query<QueuedDeviceCommand>(
       `
@@ -2532,10 +5243,47 @@ export class DeviceGatewayService {
         normalizedCommandCode,
         startToken,
         sessionRef,
-        this.asString(input.request_msg_id) || null,
-        this.asNumber(input.request_seq_no),
+        requestMsgId,
+        requestSeqNo,
         JSON.stringify(requestPayload)
       ],
+      client
+    );
+
+    const queuedDeviceCommand = insertedCommand.rows[0];
+    const outboundWireMessage = this.buildWireCommandEnvelope({
+      commandToken: queuedDeviceCommand.commandToken,
+      commandCode: queuedDeviceCommand.commandCode,
+      imei: queuedDeviceCommand.imei,
+      sessionRef: queuedDeviceCommand.sessionRef,
+      requestMsgId,
+      requestSeqNo,
+      requestPayload
+    });
+
+    await this.insertInteractionLogInClient(
+      {
+        imei: queuedDeviceCommand.imei,
+        deviceId: device.id,
+        connectionId: null,
+        protocolVersion: this.getProtocolName(),
+        direction: 'outbound',
+        msgId: requestMsgId,
+        seqNo: requestSeqNo,
+        msgType: outboundWireMessage?.t ? this.normalizeWireMsgType(outboundWireMessage.t) : normalizedCommandCode,
+        eventType: 'PLATFORM_COMMAND_QUEUED',
+        sessionRef,
+        commandId: queuedDeviceCommand.id,
+        deviceTs: null,
+        serverRxTs: new Date().toISOString(),
+        idempotencyKey: `outbound:${queuedDeviceCommand.commandToken}`,
+        orderingKey: `outbound:${queuedDeviceCommand.imei}:${requestSeqNo}:${queuedDeviceCommand.commandToken}`,
+        integrityOk: true,
+        clockDriftSec: null,
+        payload: {
+          ...(outboundWireMessage ?? {})
+        }
+      },
       client
     );
 
@@ -2592,10 +5340,10 @@ export class DeviceGatewayService {
   }
 
   async queueCommand(
-    input: {
-      target_device_id?: string;
-      imei?: string;
-      session_id?: string | null;
+      input: {
+        target_device_id?: string;
+        imei?: string;
+        session_id?: string | null;
     session_ref?: string | null;
     order_id?: string | null;
     command_code?: string;
@@ -2615,11 +5363,261 @@ export class DeviceGatewayService {
     return this.db.withTransaction((tx) => this.queueCommandInClient(input, tx));
   }
 
+  async getRealtimeDispatchCandidate(commandToken: string) {
+    if (!this.looksLikeUuid(commandToken)) return null;
+
+    const result = await this.db.query<QueuedDeviceCommand>(
+      `
+      select
+        id,
+        command_id::text as "commandToken",
+        command_code as "commandCode",
+        command_status as "commandStatus",
+        target_device_id as "targetDeviceId",
+        imei,
+        session_id as "sessionId",
+        session_ref as "sessionRef",
+        request_msg_id as "requestMsgId",
+        request_seq_no as "requestSeqNo",
+        start_token as "startToken",
+        sent_at as "sentAt",
+        acked_at as "ackedAt",
+        request_payload_json as "requestPayload"
+      from device_command
+      where tenant_id = $1
+        and command_id = $2::uuid
+      limit 1
+      `,
+      [TENANT_ID, commandToken]
+    );
+
+    const row = result.rows[0];
+    if (!row) return null;
+    if (!['created', 'retry_pending'].includes(row.commandStatus)) return null;
+
+    const wireMessage = this.buildWireCommandEnvelope({
+      commandToken: row.commandToken,
+      commandCode: row.commandCode,
+      imei: row.imei,
+      sessionRef: row.sessionRef,
+      requestMsgId: row.requestMsgId,
+      requestSeqNo: row.requestSeqNo,
+      requestPayload: row.requestPayload
+    });
+    if (!wireMessage) return null;
+
+    return {
+      id: row.id,
+      commandToken: row.commandToken,
+      commandCode: row.commandCode,
+      commandStatus: row.commandStatus,
+      targetDeviceId: row.targetDeviceId,
+      imei: row.imei,
+      sessionId: row.sessionId,
+      sessionRef: row.sessionRef,
+      requestMsgId: row.requestMsgId,
+      requestSeqNo: row.requestSeqNo,
+      startToken: row.startToken,
+      requestPayload: row.requestPayload,
+      wireMessage
+    } satisfies RealtimeDispatchCandidate;
+  }
+
+  private async markQueuedCommandsSentInClient(
+    rows: Array<{ id: string; commandToken: string; commandStatus: string }>,
+    client: PoolClient
+  ) {
+    if (rows.length === 0) return;
+
+    const commandIds = rows
+      .filter((row) => row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
+      .map((row) => row.id);
+    const commandTokens = rows.map((row) => row.commandToken);
+
+    if (commandIds.length > 0) {
+      await this.db.query(
+        `
+        update device_command
+        set command_status = case when command_status in ('created', 'retry_pending') then 'sent' else command_status end,
+            sent_at = now(),
+            updated_at = now()
+        where id = any($1::uuid[])
+        `,
+        [commandIds],
+        client
+      );
+    }
+
+    if (commandTokens.length > 0) {
+      await this.db.query(
+        `
+        update command_dispatch
+        set dispatch_status = case when dispatch_status in ('created', 'retry_pending') then 'sent' else dispatch_status end,
+            sent_at = now()
+        where tenant_id = $1
+          and coalesce(
+            request_payload_json->>'device_command_token',
+            request_payload_json->>'command_token',
+            request_payload_json->>'device_command_id',
+            request_payload_json->>'command_id'
+          ) = any($2::text[])
+        `,
+        [TENANT_ID, commandTokens],
+        client
+      );
+    }
+  }
+
+  async markCommandSentRealtime(commandToken: string) {
+    if (!this.looksLikeUuid(commandToken)) return { command_status: 'invalid' as const };
+
+    return this.db.withTransaction(async (client) => {
+      const result = await this.db.query<{ id: string; commandToken: string; commandStatus: string }>(
+        `
+        select
+          id,
+          command_id::text as "commandToken",
+          command_status as "commandStatus"
+        from device_command
+        where tenant_id = $1
+          and command_id = $2::uuid
+        limit 1
+        `,
+        [TENANT_ID, commandToken],
+        client
+      );
+
+      const row = result.rows[0];
+      if (!row) return { command_status: 'missing' as const };
+      await this.markQueuedCommandsSentInClient([row], client);
+      return {
+        command_status:
+          row.commandStatus === 'created' || row.commandStatus === 'retry_pending'
+            ? ('sent' as const)
+            : (row.commandStatus as 'sent')
+      };
+    });
+  }
+
+  async recordRealtimeCommandSent(input: {
+    commandId: string;
+    targetDeviceId?: string | null;
+    connectionId: string;
+    imei: string;
+    sessionRef?: string | null;
+    requestMsgId?: string | null;
+    requestSeqNo?: number | null;
+    commandToken: string;
+    commandCode: string;
+    wireMessage: Record<string, unknown>;
+  }) {
+    return this.db.withTransaction(async (client) => {
+      return this.insertInteractionLogInClient(
+        {
+          imei: input.imei,
+          deviceId: input.targetDeviceId ?? null,
+          connectionId: input.connectionId,
+          protocolVersion: this.getProtocolName(),
+          direction: 'outbound',
+          msgId: input.requestMsgId ?? null,
+          seqNo: input.requestSeqNo ?? null,
+          msgType: this.normalizeWireMsgType(this.asString(input.wireMessage.t)) || input.commandCode,
+          eventType: 'PLATFORM_COMMAND_SENT',
+          sessionRef: input.sessionRef ?? null,
+          commandId: input.commandId,
+          deviceTs: null,
+          serverRxTs: new Date().toISOString(),
+          idempotencyKey: `outbound-sent:${input.commandToken}:${input.connectionId}`,
+          orderingKey: `outbound-sent:${input.imei}:${input.requestSeqNo ?? 0}:${input.commandToken}`,
+          integrityOk: true,
+          clockDriftSec: null,
+          payload: {
+            ...input.wireMessage
+          }
+        },
+        client
+      );
+    });
+  }
+
+  async dispatchQuery(input: DispatchQueryInput) {
+    const queryCode = this.ensureSupportedQueryCode(input.query_code);
+    return this.queueCommand({
+      target_device_id: this.asString(input.target_device_id) || undefined,
+      imei: this.asString(input.imei) || undefined,
+      session_id: this.asString(input.session_id) || null,
+      session_ref: this.asString(input.session_ref) || null,
+      command_code: 'QUERY',
+      request_payload: {
+        ...this.asObject(input.payload),
+        scope: this.resolveQueryScope(queryCode, input.scope),
+        query_code: queryCode,
+        module_code:
+          queryCode === 'query_electric_meter' ? null : this.asString(input.module_code) || null,
+        module_instance_code: null,
+        channel_code: null,
+        metric_codes: [],
+      },
+      source: this.asString(input.source) || 'ops_device_gateway.query',
+    });
+  }
+
+  async dispatchExecuteAction(input: DispatchExecuteActionInput) {
+    const actionCode = this.ensureSupportedActionCode(input.action_code);
+    const requestPayload = this.asObject(input.payload);
+    return this.queueCommand({
+      target_device_id: this.asString(input.target_device_id) || undefined,
+      imei: this.asString(input.imei) || undefined,
+      session_id: this.asString(input.session_id) || null,
+      session_ref: this.asString(input.session_ref) || null,
+      order_id: this.asString(input.order_id) || null,
+      start_token: this.asString(input.start_token) || null,
+      command_code: 'EXECUTE_ACTION',
+      request_payload: {
+        ...requestPayload,
+        scope: this.resolveActionScope(actionCode, input.scope),
+        action_code: actionCode,
+        module_code: this.resolveActionModuleCode(actionCode, input.module_code),
+        module_instance_code: null,
+        channel_code: null,
+        target_ref: this.resolveActionTargetRef(actionCode, requestPayload, input.channel_code),
+      },
+      source: this.asString(input.source) || 'ops_device_gateway.execute',
+    });
+  }
+
+  async dispatchSyncConfig(input: DispatchSyncConfigInput) {
+    const configVersion = this.asNumber(input.config_version);
+    if (configVersion === null) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'config_version is required');
+    }
+
+    return this.queueCommand({
+      target_device_id: this.asString(input.target_device_id) || undefined,
+      imei: this.asString(input.imei) || undefined,
+      session_id: this.asString(input.session_id) || null,
+      session_ref: this.asString(input.session_ref) || null,
+      command_code: 'SYNC_CONFIG',
+      request_payload: {
+        ...this.asObject(input.payload),
+        config_version: Math.trunc(configVersion),
+        firmware_family: this.asString(input.firmware_family) || null,
+        feature_modules: Array.isArray(input.feature_modules)
+          ? input.feature_modules.map((item) => this.asString(item)).filter((item) => Boolean(item))
+          : [],
+        channel_bindings: Array.isArray(input.channel_bindings) ? input.channel_bindings : [],
+        runtime_rules: this.asObject(input.runtime_rules),
+        resource_inventory: this.asObject(input.resource_inventory),
+      },
+      source: this.asString(input.source) || 'ops_device_gateway.sync_config',
+    });
+  }
+
   async pullPendingCommands(params?: {
-    imei?: string;
-    session_ref?: string;
-    limit?: number;
-    mark_sent?: boolean;
+      imei?: string;
+      session_ref?: string;
+      limit?: number;
+      mark_sent?: boolean;
     include_sent?: boolean;
   }) {
     const filters: string[] = ['dc.tenant_id = $1'];
@@ -2656,6 +5654,8 @@ export class DeviceGatewayService {
           dc.imei,
           dc.session_id as "sessionId",
           dc.session_ref as "sessionRef",
+          dc.request_msg_id as "requestMsgId",
+          dc.request_seq_no as "requestSeqNo",
           dc.start_token as "startToken",
           dc.sent_at as "sentAt",
           dc.acked_at as "ackedAt",
@@ -2677,65 +5677,43 @@ export class DeviceGatewayService {
       );
 
       if (markSent && result.rows.length > 0) {
-        const commandIds = result.rows
-          .filter((row) => row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
-          .map((row) => row.id);
-        const commandTokens = result.rows.map((row) => row.commandToken);
-
-        if (commandIds.length > 0) {
-          await this.db.query(
-            `
-            update device_command
-            set command_status = case when command_status in ('created', 'retry_pending') then 'sent' else command_status end,
-                sent_at = now(),
-                updated_at = now()
-            where id = any($1::uuid[])
-            `,
-            [commandIds],
-            client
-          );
-        }
-
-        if (commandTokens.length > 0) {
-          await this.db.query(
-            `
-            update command_dispatch
-            set dispatch_status = case when dispatch_status in ('created', 'retry_pending') then 'sent' else dispatch_status end,
-                sent_at = now()
-            where tenant_id = $1
-              and coalesce(
-                request_payload_json->>'device_command_token',
-                request_payload_json->>'command_token',
-                request_payload_json->>'device_command_id',
-                request_payload_json->>'command_id'
-              ) = any($2::text[])
-            `,
-            [TENANT_ID, commandTokens],
-            client
-          );
-        }
+        await this.markQueuedCommandsSentInClient(result.rows, client);
       }
 
       return {
-        items: result.rows.map((row) => ({
-          id: row.id,
-          command_token: row.commandToken,
-          command_code: row.commandCode,
-          command_status:
-            markSent && (row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
-              ? 'sent'
-              : row.commandStatus,
-          imei: row.imei,
-          session_id: row.sessionId,
-          session_ref: row.sessionRef,
-          start_token: row.startToken,
-          sent_at: markSent && (row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
-            ? new Date().toISOString()
-            : row.sentAt,
-          acked_at: row.ackedAt,
-          device_name: row.deviceName,
-          request_payload: row.requestPayload
-        })),
+        items: result.rows.map((row) => {
+          const wireMessage = this.buildWireCommandEnvelope({
+            commandToken: row.commandToken,
+            commandCode: row.commandCode,
+            imei: row.imei,
+            sessionRef: row.sessionRef,
+            requestMsgId: row.requestMsgId,
+            requestSeqNo: row.requestSeqNo,
+            requestPayload: row.requestPayload
+          });
+          return {
+            id: row.id,
+            command_token: row.commandToken,
+            command_code: row.commandCode,
+            command_status:
+              markSent && (row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
+                ? 'sent'
+                : row.commandStatus,
+            imei: row.imei,
+            session_id: row.sessionId,
+            session_ref: row.sessionRef,
+            request_msg_id: row.requestMsgId,
+            request_seq_no: row.requestSeqNo,
+            start_token: row.startToken,
+            sent_at: markSent && (row.commandStatus === 'created' || row.commandStatus === 'retry_pending')
+              ? new Date().toISOString()
+              : row.sentAt,
+            acked_at: row.ackedAt,
+            device_name: row.deviceName,
+            request_payload: row.requestPayload,
+            wire_message: wireMessage
+          };
+        }),
         total: result.rows.length,
         queue_mode: 'backend_command_queue',
         ack_endpoint: '/api/v1/ops/device-gateway/runtime-events'
@@ -2825,6 +5803,312 @@ export class DeviceGatewayService {
         payload: row.payload
       })),
       total: result.rows.length
+    };
+  }
+
+  async listInteractionLogs(params?: {
+    device_id?: string;
+    imei?: string;
+    direction?: string;
+    msg_type?: string;
+    event_type?: string;
+    session_ref?: string;
+    command_id?: string;
+    keyword?: string;
+    start_at?: string;
+    end_at?: string;
+    cursor?: string;
+    limit?: number;
+  }) {
+    const filters: string[] = ['log_scope.tenant_id = $1'];
+    const values: unknown[] = [TENANT_ID];
+
+    const normalizedDeviceId = this.asString(params?.device_id);
+    const normalizedImei = this.asString(params?.imei);
+    if (normalizedDeviceId && normalizedImei) {
+      values.push(normalizedDeviceId);
+      const deviceIndex = values.length;
+      values.push(normalizedImei);
+      const imeiIndex = values.length;
+      filters.push(`(log_scope.device_id = $${deviceIndex} or log_scope.imei = $${imeiIndex})`);
+    } else if (normalizedDeviceId) {
+      values.push(normalizedDeviceId);
+      filters.push(`log_scope.device_id = $${values.length}`);
+    } else if (normalizedImei) {
+      values.push(normalizedImei);
+      filters.push(`log_scope.imei = $${values.length}`);
+    }
+    if (this.asString(params?.direction)) {
+      values.push(this.asString(params?.direction).toLowerCase());
+      filters.push(`lower(log_scope.direction) = $${values.length}`);
+    }
+    if (this.asString(params?.msg_type)) {
+      values.push(this.asString(params?.msg_type).toUpperCase());
+      filters.push(`upper(log_scope.msg_type) = $${values.length}`);
+    }
+    if (this.asString(params?.event_type)) {
+      values.push(this.asString(params?.event_type));
+      filters.push(`log_scope.event_type = $${values.length}`);
+    }
+    if (this.asString(params?.session_ref)) {
+      values.push(this.asString(params?.session_ref));
+      filters.push(`log_scope.session_ref = $${values.length}`);
+    }
+    if (this.asString(params?.command_id)) {
+      values.push(this.asString(params?.command_id));
+      filters.push(`log_scope.command_id = $${values.length}`);
+    }
+    if (this.asString(params?.keyword)) {
+      values.push(`%${this.asString(params?.keyword)}%`);
+      filters.push(
+        `(coalesce(log_scope.raw_body_text, log_scope.payload_json::text, '') ilike $${values.length}
+          or coalesce(log_scope.payload_preview_json::text, '') ilike $${values.length})`
+      );
+    }
+
+    const startAt = this.toIsoTimestamp(this.asString(params?.start_at));
+    if (startAt) {
+      values.push(startAt);
+      filters.push(`log_scope.server_rx_ts >= $${values.length}::timestamptz`);
+    }
+
+    const endAt = this.toIsoTimestamp(this.asString(params?.end_at));
+    if (endAt) {
+      values.push(endAt);
+      filters.push(`log_scope.server_rx_ts <= $${values.length}::timestamptz`);
+    }
+
+    const cursor = this.parseInteractionLogCursor(params?.cursor);
+    if (cursor) {
+      values.push(cursor.serverRxTs);
+      const tsIndex = values.length;
+      values.push(cursor.id);
+      const idIndex = values.length;
+      filters.push(
+        `(log_scope.server_rx_ts < $${tsIndex}::timestamptz
+          or (log_scope.server_rx_ts = $${tsIndex}::timestamptz and log_scope.id < $${idIndex}))`
+      );
+    }
+
+    const limit = Math.min(Math.max(Number(params?.limit ?? 50), 1), 100);
+    values.push(limit + 1);
+
+    const result = await this.db.query<DeviceInteractionLogRecord>(
+      `
+      with log_scope as (
+        select
+          'v2'::text as source,
+          dml.id::text as id,
+          dml.tenant_id as tenant_id,
+          dml.device_id::text as device_id,
+          dml.imei,
+          d.device_code as device_code,
+          d.device_name as device_name,
+          dml.connection_id as connection_id,
+          dml.protocol_version as protocol_version,
+          dml.direction,
+          dml.msg_id as msg_id,
+          dml.seq_no as seq_no,
+          dml.msg_type as msg_type,
+          dml.event_type as event_type,
+          dml.session_ref as session_ref,
+          dml.command_id::text as command_id,
+          dc.command_id::text as command_token,
+          dc.command_code as command_code,
+          dc.command_status as command_status,
+          dml.device_ts as device_ts,
+          dml.server_rx_ts as server_rx_ts,
+          dml.integrity_ok as integrity_ok,
+          dml.payload_size_bytes as payload_size_bytes,
+          dml.payload_preview_json as payload_preview_json,
+          dml.payload_json as payload_json,
+          dml.raw_body_text as raw_body_text,
+          dml.raw_body_ref as raw_body_ref,
+          dml.storage_tier as storage_tier
+        from device_message_log_v2 dml
+        left join device d on d.id = dml.device_id
+        left join device_command dc on dc.id = dml.command_id
+        where dml.tenant_id = $1
+
+        union all
+
+        select
+          'legacy'::text as source,
+          dml.id::text as id,
+          dml.tenant_id as tenant_id,
+          dml.device_id::text as device_id,
+          dml.imei,
+          d.device_code as device_code,
+          d.device_name as device_name,
+          dml.connection_id as connection_id,
+          dml.protocol_version as protocol_version,
+          dml.direction,
+          dml.msg_id as msg_id,
+          dml.seq_no as seq_no,
+          dml.msg_type as msg_type,
+          dml.payload_json->>'event_type' as event_type,
+          dml.session_ref as session_ref,
+          dml.command_id::text as command_id,
+          dc.command_id::text as command_token,
+          dc.command_code as command_code,
+          dc.command_status as command_status,
+          dml.device_ts as device_ts,
+          dml.server_rx_ts as server_rx_ts,
+          dml.integrity_ok as integrity_ok,
+          greatest(octet_length(dml.payload_json::text), 0) as payload_size_bytes,
+          coalesce(
+            case when jsonb_typeof(dml.payload_json->'payload') = 'object' then dml.payload_json->'payload' end,
+            dml.payload_json
+          ) as payload_preview_json,
+          dml.payload_json as payload_json,
+          null::text as raw_body_text,
+          null::varchar(512) as raw_body_ref,
+          'legacy_hot'::varchar(16) as storage_tier
+        from device_message_log dml
+        left join device d on d.id = dml.device_id
+        left join device_command dc on dc.id = dml.command_id
+        where dml.tenant_id = $1
+      )
+      select
+        log_scope.source as source,
+        log_scope.id as id,
+        log_scope.tenant_id as "tenantId",
+        log_scope.device_id as "deviceId",
+        log_scope.imei as imei,
+        log_scope.device_code as "deviceCode",
+        log_scope.device_name as "deviceName",
+        log_scope.connection_id as "connectionId",
+        log_scope.protocol_version as "protocolVersion",
+        log_scope.direction as direction,
+        log_scope.msg_id as "msgId",
+        log_scope.seq_no as "seqNo",
+        log_scope.msg_type as "msgType",
+        log_scope.event_type as "eventType",
+        log_scope.session_ref as "sessionRef",
+        log_scope.command_id as "commandId",
+        log_scope.command_token as "commandToken",
+        log_scope.command_code as "commandCode",
+        log_scope.command_status as "commandStatus",
+        log_scope.device_ts::text as "deviceTs",
+        log_scope.server_rx_ts::text as "serverRxTs",
+        log_scope.integrity_ok as "integrityOk",
+        log_scope.payload_size_bytes as "payloadSizeBytes",
+        log_scope.payload_preview_json as "payloadPreview",
+        log_scope.payload_json as payload,
+        log_scope.raw_body_text as "rawBodyText",
+        log_scope.raw_body_ref as "rawBodyRef",
+        log_scope.storage_tier as "storageTier"
+      from log_scope
+      where ${filters.join(' and ')}
+      order by log_scope.server_rx_ts desc, log_scope.id desc
+      limit $${values.length}
+      `,
+      values
+    );
+
+    const hasMore = result.rows.length > limit;
+    const items = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const nextCursor = hasMore
+      ? this.buildInteractionLogCursor(items[items.length - 1].serverRxTs, items[items.length - 1].id)
+      : null;
+
+    return {
+      items: items.map((row) => ({
+        source: row.source,
+        id: row.id,
+        tenantId: row.tenantId,
+        deviceId: row.deviceId,
+        imei: row.imei,
+        deviceCode: row.deviceCode,
+        deviceName: row.deviceName,
+        connectionId: row.connectionId,
+        protocolVersion: row.protocolVersion,
+        direction: row.direction,
+        msgId: row.msgId,
+        seqNo: row.seqNo,
+        msgType: row.msgType,
+        eventType: row.eventType,
+        sessionRef: row.sessionRef,
+        commandId: row.commandId,
+        commandToken: row.commandToken,
+        commandCode: row.commandCode,
+        commandStatus: row.commandStatus,
+        deviceTs: row.deviceTs,
+        serverRxTs: row.serverRxTs,
+        integrityOk: row.integrityOk,
+        payloadSizeBytes: Number(row.payloadSizeBytes ?? 0),
+        payloadPreview: this.asObject(row.payloadPreview),
+        payload: this.asObject(row.payload),
+        rawBodyRef: row.rawBodyRef,
+        storageTier: row.storageTier,
+        hasRawBody: Boolean(row.rawBodyText || row.rawBodyRef)
+      })),
+      limit,
+      hasMore,
+      nextCursor
+    };
+  }
+
+  async getInteractionLogRaw(logId: string) {
+    const normalizedLogId = this.asString(logId);
+    if (!this.looksLikeUuid(normalizedLogId)) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'logId must be a uuid');
+    }
+
+    const result = await this.db.query<{
+      source: 'v2' | 'legacy';
+      id: string;
+      msgType: string;
+      rawBodyText: string | null;
+      payload: Record<string, unknown>;
+    }>(
+      `
+      with log_scope as (
+        select
+          'v2'::text as source,
+          dml.id::text as id,
+          dml.msg_type as msg_type,
+          dml.raw_body_text as raw_body_text,
+          dml.payload_json as payload_json
+        from device_message_log_v2 dml
+        where dml.tenant_id = $1
+          and dml.id = $2::uuid
+
+        union all
+
+        select
+          'legacy'::text as source,
+          dml.id::text as id,
+          dml.msg_type as msg_type,
+          null::text as raw_body_text,
+          dml.payload_json as payload_json
+        from device_message_log dml
+        where dml.tenant_id = $1
+          and dml.id = $2::uuid
+      )
+      select
+        source as source,
+        id as id,
+        msg_type as "msgType",
+        raw_body_text as "rawBodyText",
+        payload_json as payload
+      from log_scope
+      limit 1
+      `,
+      [TENANT_ID, normalizedLogId]
+    );
+
+    const row = result.rows[0] ?? null;
+    if (!row) {
+      throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Interaction log not found', 404, { logId });
+    }
+
+    const body = row.rawBodyText || JSON.stringify(row.payload ?? {}, null, 2);
+    const extension = row.rawBodyText ? 'txt' : 'json';
+    return {
+      file_name: `device-interaction-log-${normalizedLogId}.${extension}`,
+      content_type: row.rawBodyText ? 'text/plain' : 'application/json',
+      body
     };
   }
 
@@ -2933,7 +6217,7 @@ export class DeviceGatewayService {
           count(*)::int as active_session_count
         from runtime_session rs
         where rs.tenant_id = $1
-          and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+          and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         group by rs.device_key
       )
       select
@@ -2993,7 +6277,7 @@ export class DeviceGatewayService {
       left join runtime_session rs
         on rs.tenant_id = d.tenant_id
        and rs.device_key = d.imei
-       and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+       and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
       where d.tenant_id = $1
         and d.imei is not null
         and (
@@ -3165,6 +6449,7 @@ export class DeviceGatewayService {
     const disconnectGraceSeconds = this.getDisconnectGraceSeconds();
 
     return this.db.withTransaction(async (client) => {
+      const runtimeHealthSweep = await this.runtimeIngestService.sweepHealthState(TENANT_ID, client);
       const workOrderPolicy = await this.getOfflineWorkOrderPolicy(client);
       const devices = await this.db.query<{ id: string; imei: string; deviceName: string | null; deviceCode: string }>(
         `
@@ -3228,6 +6513,9 @@ export class DeviceGatewayService {
       let createdWorkOrderCount = 0;
       let reusedWorkOrderCount = 0;
       let autoAssignedWorkOrderCount = 0;
+      let disconnectedCommandDeadLetterCount = 0;
+      let disconnectedStartClosedCount = 0;
+      let disconnectedStopReviewCount = 0;
 
       for (const item of devices.rows) {
         const device: ResolvedDevice = {
@@ -3236,8 +6524,16 @@ export class DeviceGatewayService {
           deviceCode: item.deviceCode,
           deviceName: item.deviceName,
           onlineState: 'offline',
-          runtimeState: null
+          runtimeState: null,
+          projectId: null,
+          blockId: null,
+          sourceNodeCode: null
         };
+        const disconnectedAt = new Date().toISOString();
+        const disconnectedCommandRecovery = await this.closeDisconnectedPendingControlCommands(item.imei, disconnectedAt, client);
+        disconnectedCommandDeadLetterCount += disconnectedCommandRecovery.deadLettered;
+        disconnectedStartClosedCount += disconnectedCommandRecovery.startClosed;
+        disconnectedStopReviewCount += disconnectedCommandRecovery.stopReviewQueued;
         const activeSessions = await this.listActiveSessionsByDeviceImei(item.imei, client);
         const alarm = await this.createOrRefreshOfflineAlarm(device, activeSessions, heartbeatTimeoutSeconds, client);
         if (alarm.created) {
@@ -3276,6 +6572,7 @@ export class DeviceGatewayService {
         connection_mode: 'heartbeat_plus_transport_session',
         heartbeat_timeout_seconds: heartbeatTimeoutSeconds,
         disconnect_grace_seconds: disconnectGraceSeconds,
+        runtime_health_sweep: runtimeHealthSweep,
         swept_device_count: devices.rows.length,
         swept_imeis: devices.rows.map((item) => item.imei),
         created_alarm_count: createdAlarmCount,
@@ -3283,7 +6580,10 @@ export class DeviceGatewayService {
         impacted_session_count: impactedSessionCount,
         created_work_order_count: createdWorkOrderCount,
         reused_work_order_count: reusedWorkOrderCount,
-        auto_assigned_work_order_count: autoAssignedWorkOrderCount
+        auto_assigned_work_order_count: autoAssignedWorkOrderCount,
+        disconnected_command_dead_letter_count: disconnectedCommandDeadLetterCount,
+        disconnected_start_closed_count: disconnectedStartClosedCount,
+        disconnected_stop_review_count: disconnectedStopReviewCount
       };
     });
   }
@@ -3421,18 +6721,53 @@ export class DeviceGatewayService {
       let deadLettered = 0;
 
       for (const row of candidates.rows) {
-        const retryCount = this.getRetryCount(row.responsePayload);
+        const synchronousStartCommand = this.isSynchronousStartCommand({
+          commandCode: row.commandCode,
+          requestPayload: row.requestPayload
+        });
+      const synchronousWorkflowControlCommand = this.isSynchronousWorkflowControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonReplayableRealtimeControlCommand = this.isNonReplayableRealtimeControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const sessionStopCommand = this.isSessionStopCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonRetryableControlCommand =
+        synchronousStartCommand || synchronousWorkflowControlCommand || nonReplayableRealtimeControlCommand;
+      const retryCount = this.getRetryCount(row.responsePayload);
         const nextRetryCount = retryCount + 1;
-        const canRetry = nextRetryCount <= policy.retry_limit;
+        const canRetry = !nonRetryableControlCommand && nextRetryCount <= policy.retry_limit;
         const nextRetryAt = canRetry ? this.computeNextRetryAt(nextRetryCount) : null;
         const nextStatus = canRetry ? 'retry_pending' : 'dead_letter';
         const transportPatch = {
           retry_count: nextRetryCount,
           retry_delay_seconds: canRetry ? this.computeRetryDelaySeconds(nextRetryCount) : null,
           next_retry_at: nextRetryAt,
-          last_transition: canRetry ? 'timeout_requeue' : 'dead_letter_timeout',
+          retryable: !nonRetryableControlCommand,
+          last_transition: synchronousStartCommand
+            ? 'sync_start_timeout_closed'
+            : synchronousWorkflowControlCommand
+              ? 'sync_workflow_control_timeout_closed'
+            : nonReplayableRealtimeControlCommand
+              ? 'realtime_control_timeout_closed'
+            : canRetry
+              ? 'timeout_requeue'
+              : 'dead_letter_timeout',
           last_timeout_at: new Date().toISOString(),
-          dead_letter_reason: canRetry ? null : 'ack_timeout_exceeded'
+          dead_letter_reason: canRetry
+            ? null
+            : synchronousStartCommand
+              ? 'sync_start_ack_timeout'
+              : synchronousWorkflowControlCommand
+                ? 'sync_workflow_control_ack_timeout'
+              : nonReplayableRealtimeControlCommand
+                ? 'realtime_control_ack_timeout'
+              : 'ack_timeout_exceeded'
         };
 
         await this.db.query(
@@ -3452,6 +6787,43 @@ export class DeviceGatewayService {
 
         await this.updateDispatchStatusByCommandToken(row.commandToken, nextStatus, transportPatch, client);
 
+        if (nextStatus === 'dead_letter' && synchronousStartCommand) {
+          const session = await this.resolveSession(row.sessionRef ?? null, row.sessionId ?? null, client);
+          if (session) {
+            await this.failPendingStartSession(session, client, {
+              endedAt: new Date().toISOString(),
+              reasonCode: 'sync_start_ack_timeout',
+              reasonText: 'synchronous start command timed out before device acknowledgement and was closed immediately',
+              gatewayEventType: 'COMMAND_TIMEOUT',
+              gatewayEventCode: 'sync_start_ack_timeout',
+              failureSource: 'command_timeout',
+              failureMessage: 'synchronous start command timed out before device acknowledgement',
+              snapshot: {
+                command_id: row.id,
+                command_token: row.commandToken,
+                command_code: row.commandCode,
+                command_status: nextStatus,
+                timeout_at: new Date().toISOString()
+              }
+          });
+        }
+        }
+
+        if (nextStatus === 'dead_letter' && sessionStopCommand) {
+          const session = await this.resolveSession(row.sessionRef ?? null, row.sessionId ?? null, client);
+          if (session) {
+            await this.orderSettlementService.markStopPendingReview(session.id, client, {
+              reviewAt: new Date().toISOString(),
+              reasonCode: 'ack_timeout_exceeded',
+              reasonText: 'stop command timed out before device acknowledgement and the order is waiting for manual review',
+              source: 'device_gateway_timeout_sweep',
+              commandId: row.id,
+              commandToken: row.commandToken,
+              commandCode: row.commandCode
+            });
+          }
+        }
+
         if (canRetry) {
           retryQueued += 1;
         } else {
@@ -3465,8 +6837,125 @@ export class DeviceGatewayService {
         scanned: candidates.rows.length,
         retry_queued: retryQueued,
         dead_lettered: deadLettered
-      };
-    });
+        };
+      });
+    }
+
+  async listCommands(params?: {
+    imei?: string;
+    target_device_id?: string;
+    session_ref?: string;
+    command_status?: string;
+    command_code?: string;
+    limit?: number;
+  }) {
+    const filters: string[] = ['dc.tenant_id = $1'];
+    const values: unknown[] = [TENANT_ID];
+
+    if (this.asString(params?.imei)) {
+      values.push(this.asString(params?.imei));
+      filters.push(`dc.imei = $${values.length}`);
+    }
+    if (this.asString(params?.target_device_id)) {
+      values.push(this.asString(params?.target_device_id));
+      filters.push(`dc.target_device_id = $${values.length}::uuid`);
+    }
+    if (this.asString(params?.session_ref)) {
+      values.push(this.asString(params?.session_ref));
+      filters.push(`dc.session_ref = $${values.length}`);
+    }
+    if (this.asString(params?.command_status)) {
+      values.push(this.asString(params?.command_status));
+      filters.push(`dc.command_status = $${values.length}`);
+    }
+    if (this.asString(params?.command_code)) {
+      values.push(this.asString(params?.command_code).toUpperCase());
+      filters.push(`dc.command_code = $${values.length}`);
+    }
+
+    const limit = Math.min(Math.max(Number(params?.limit ?? 50), 1), 200);
+    values.push(limit);
+
+    const result = await this.db.query<DeviceGatewayCommandRecord>(
+      `
+      select
+        dc.id,
+        dc.command_id::text as "commandToken",
+        dc.command_code as "commandCode",
+        dc.command_status as "commandStatus",
+        dc.imei,
+        dc.target_device_id::text as "targetDeviceId",
+        dc.session_id::text as "sessionId",
+        dc.session_ref as "sessionRef",
+        dc.request_msg_id as "requestMsgId",
+        dc.request_seq_no as "requestSeqNo",
+        dc.ack_msg_id as "ackMsgId",
+        dc.ack_seq_no as "ackSeqNo",
+        dc.sent_at as "sentAt",
+        dc.acked_at as "ackedAt",
+        dc.failed_at as "failedAt",
+        dc.timeout_at as "timeoutAt",
+        dc.created_at as "createdAt",
+        dc.updated_at as "updatedAt",
+        dc.request_payload_json as "requestPayload",
+        dc.response_payload_json as "responsePayload",
+        d.device_code as "deviceCode",
+        d.device_name as "deviceName"
+      from device_command dc
+      left join device d on d.id = dc.target_device_id
+      where ${filters.join(' and ')}
+      order by dc.created_at desc
+      limit $${values.length}
+      `,
+      values
+    );
+
+    return result.rows.map((row) => this.serializeCommandRecord(row));
+  }
+
+  async getCommand(commandId: string) {
+    if (!this.looksLikeUuid(commandId)) {
+      throw new AppException(ErrorCodes.VALIDATION_ERROR, 'commandId must be a uuid');
+    }
+
+    const result = await this.db.query<DeviceGatewayCommandRecord>(
+      `
+      select
+        dc.id,
+        dc.command_id::text as "commandToken",
+        dc.command_code as "commandCode",
+        dc.command_status as "commandStatus",
+        dc.imei,
+        dc.target_device_id::text as "targetDeviceId",
+        dc.session_id::text as "sessionId",
+        dc.session_ref as "sessionRef",
+        dc.request_msg_id as "requestMsgId",
+        dc.request_seq_no as "requestSeqNo",
+        dc.ack_msg_id as "ackMsgId",
+        dc.ack_seq_no as "ackSeqNo",
+        dc.sent_at as "sentAt",
+        dc.acked_at as "ackedAt",
+        dc.failed_at as "failedAt",
+        dc.timeout_at as "timeoutAt",
+        dc.created_at as "createdAt",
+        dc.updated_at as "updatedAt",
+        dc.request_payload_json as "requestPayload",
+        dc.response_payload_json as "responsePayload",
+        d.device_code as "deviceCode",
+        d.device_name as "deviceName"
+      from device_command dc
+      left join device d on d.id = dc.target_device_id
+      where dc.tenant_id = $1 and dc.id = $2::uuid
+      limit 1
+      `,
+      [TENANT_ID, commandId]
+    );
+
+    const row = result.rows[0] ?? null;
+    if (!row) {
+      throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Device command not found', 404, { commandId });
+    }
+    return this.serializeCommandRecord(row);
   }
 
   async requeueCommand(commandId: string) {
@@ -3511,6 +7000,35 @@ export class DeviceGatewayService {
           commandId,
           commandStatus: row.commandStatus
         });
+      }
+
+      const synchronousStartCommand = this.isSynchronousStartCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const synchronousWorkflowControlCommand = this.isSynchronousWorkflowControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      const nonReplayableRealtimeControlCommand = this.isNonReplayableRealtimeControlCommand({
+        commandCode: row.commandCode,
+        requestPayload: row.requestPayload
+      });
+      if (synchronousStartCommand || synchronousWorkflowControlCommand || nonReplayableRealtimeControlCommand) {
+        throw new AppException(
+          ErrorCodes.FORBIDDEN,
+          synchronousStartCommand
+            ? 'Synchronous start commands cannot be requeued manually because delayed resend may auto-start the pump later'
+            : synchronousWorkflowControlCommand
+              ? 'Synchronous pause/resume commands cannot be requeued manually because delayed resend may pause or resume the session later'
+              : 'Realtime control commands cannot be requeued manually because delayed resend may change on-site device state later',
+          400,
+          {
+            commandId,
+            commandCode: row.commandCode,
+            commandStatus: row.commandStatus
+          }
+        );
       }
 
       const transportPatch = {

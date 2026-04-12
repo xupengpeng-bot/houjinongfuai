@@ -53,6 +53,14 @@
 ## Device and fund rules
 
 - Device business primary key: `IMEI`
+- OTA/device command short-code rule:
+  - OTA and device-side realtime commands must use short codes when talking to embedded devices.
+  - Do not introduce or prefer long-form OTA command/query names in device-facing instructions, payload examples, or protocol changes.
+  - Current OTA short codes are:
+    - `upg` for upgrade action
+    - `qgs` for upgrade-status query
+    - `qgc` for upgrade-capability query
+  - When discussing OTA with embedded-side AI or firmware engineers, always describe the interaction using short codes first.
 - Connection conflict policy:
   - a new connection with the same `IMEI` replaces the old connection
   - an audit log must be recorded
