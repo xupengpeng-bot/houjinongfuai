@@ -9,3 +9,9 @@ backend/*.log
 backend/var/
 .cursor/
 backend/tmp-test-network.geojson
+backend/tmp/
+backend/fixtures/payment/
+backend-restart*.log
+backend-auto.err
+backend-auto.out
+backend/{console.error(e)
