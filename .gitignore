@@ -14,4 +14,4 @@ backend/fixtures/payment/
 backend-restart*.log
 backend-auto.err
 backend-auto.out
-backend/{console.error(e)
+backend/\{console.error(e)
