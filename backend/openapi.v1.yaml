@@ -34,7 +34,7 @@ paths:
     post: { summary: Create device type, tags: [device-type], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceTypeUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
   /device-types/{id}: { patch: { summary: Update device type, tags: [device-type], parameters: [ { $ref: '#/components/parameters/Id' } ], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceTypeUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
   /devices:
-    get: { summary: Device list, tags: [device-ledger], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
+    get: { summary: Device list, tags: [device-ledger], parameters: [ { in: query, name: page, schema: { type: integer, minimum: 1 } }, { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 100 } }, { in: query, name: project_id, schema: { type: string, format: uuid } }, { in: query, name: block_id, schema: { type: string, format: uuid } }, { in: query, name: asset_id, schema: { type: string, format: uuid } }, { in: query, name: device_type_id, schema: { type: string, format: uuid } }, { in: query, name: display_status, schema: { type: string, enum: [online, offline, alarm] } }, { in: query, name: q, schema: { type: string } } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
     post: { summary: Create device, tags: [device-ledger], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/DeviceUpsert' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
   /devices/{id}:
     get: { summary: Device detail, tags: [device-ledger], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
@@ -102,7 +102,7 @@ paths:
       parameters: [ { $ref: '#/components/parameters/Id' } ]
       responses:
         '200': { description: Session stopping, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } }
-  /orders: { get: { summary: Order list, tags: [order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /orders: { get: { summary: Order list, tags: [order], parameters: [ { in: query, name: page, schema: { type: integer, minimum: 1 } }, { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 200 } }, { in: query, name: target_imei, schema: { type: string } } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
   /orders/{id}:
     get: { summary: Order detail, tags: [order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
   /orders/{id}/pricing: { get: { summary: Order pricing detail, tags: [order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
@@ -122,6 +122,86 @@ paths:
   /work-orders/{id}/process: { post: { summary: Submit work-order process, tags: [work-order], parameters: [ { $ref: '#/components/parameters/Id' } ], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } } }
   /m/my/todos: { get: { summary: My todo list, tags: [work-order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
   /m/my/work-orders: { get: { summary: My work-order list, tags: [work-order], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } } }
+  /investor/contacts:
+    post:
+      summary: Create or update investor contact
+      tags: [investor]
+      description: Investor-mobile V1 contact capture. This endpoint does not create any formal subscription account.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestorContactUpsert' }
+      responses:
+        '200': { description: Investor contact saved, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorContactEnvelope' } } } }
+  /investor/project-interests:
+    get:
+      summary: Investor project-interest list
+      tags: [investor]
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1 } }
+        - { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        '200': { description: Investor project-interest page, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorProjectInterestListEnvelope' } } } }
+    post:
+      summary: Submit investor project interest
+      tags: [investor]
+      description: Creates an offline follow-up lead only. It must not be interpreted as a formal subscription or order.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestorProjectInterestCreate' }
+      responses:
+        '200': { description: Investor project interest created, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorProjectInterestEnvelope' } } } }
+  /investor/project-interests/{id}:
+    get:
+      summary: Investor project-interest detail
+      tags: [investor]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: Investor project interest detail, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorProjectInterestEnvelope' } } } }
+  /investor/project-interests/{id}/events:
+    post:
+      summary: Append investor project-interest event
+      tags: [investor]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      description: Appends a lifecycle event and updates the current read model when allowed by the state contract.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestorProjectInterestEventAppendRequest' }
+      responses:
+        '200': { description: Investor project interest updated, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorProjectInterestEnvelope' } } } }
+  /investor/material-access:
+    post:
+      summary: Log investor material access
+      tags: [investor]
+      description: Records material-room access only; it does not store or serve the material body itself.
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/InvestorMaterialAccessRequest' }
+      responses:
+        '200': { description: Material access logged, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } }
+  /investor/messages:
+    get:
+      summary: Investor message list
+      tags: [investor]
+      parameters:
+        - { in: query, name: page, schema: { type: integer, minimum: 1 } }
+        - { in: query, name: page_size, schema: { type: integer, minimum: 1, maximum: 200 } }
+      responses:
+        '200': { description: Investor message page, content: { application/json: { schema: { $ref: '#/components/schemas/InvestorMessageListEnvelope' } } } }
+  /investor/messages/{id}/read:
+    post:
+      summary: Mark investor message as read
+      tags: [investor]
+      parameters: [ { $ref: '#/components/parameters/Id' } ]
+      responses:
+        '200': { description: Investor message read state updated, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } }
   /uat/cases:
     get: { summary: UAT case list, tags: [uat], responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/ListEnvelope' } } } } } }
     post: { summary: Create UAT case, tags: [uat], requestBody: { required: true, content: { application/json: { schema: { $ref: '#/components/schemas/UatCaseCreate' } } } }, responses: { '200': { description: OK, content: { application/json: { schema: { $ref: '#/components/schemas/GenericEnvelope' } } } } } }
@@ -226,6 +306,186 @@ components:
     RuntimeStartCheckRequest: { type: object, required: [targetType, targetId], properties: { targetType: { type: string, enum: [valve, well, session] }, targetId: { type: string }, sceneCode: { type: string } } }
     CreateRuntimeSessionRequest: { type: object, required: [decisionId], properties: { decisionId: { type: string }, confirmToken: { type: string } } }
     WorkOrderCreate: { type: object, properties: { sourceAlarmId: { type: string }, sourceSessionId: { type: string }, workOrderType: { type: string }, assigneeUserId: { type: string } } }
+    InvestorIntentLifecycleStatus: { type: string, enum: [submitted, contacted, materials_shared, meeting_scheduled, watchlist, converted_offline, closed_lost, archived] }
+    InvestorContactUpsert:
+      type: object
+      required: [contact_name, contact_phone]
+      properties:
+        source_channel: { type: string }
+        source_session_key: { type: string }
+        contact_name: { type: string }
+        contact_phone: { type: string }
+        organization_name: { type: string }
+        position_title: { type: string }
+        city_name: { type: string }
+        wechat_no: { type: string }
+        investor_type: { type: string, enum: [individual, institution, family_office, strategic_partner] }
+        risk_preference: { type: string }
+    InvestorContact:
+      type: object
+      properties:
+        id: { type: string }
+        source_channel: { type: string }
+        source_session_key: { type: string, nullable: true }
+        contact_name: { type: string }
+        contact_phone: { type: string }
+        organization_name: { type: string, nullable: true }
+        position_title: { type: string, nullable: true }
+        city_name: { type: string, nullable: true }
+        wechat_no: { type: string, nullable: true }
+        investor_type: { type: string, nullable: true }
+        risk_preference: { type: string, nullable: true }
+        status: { type: string }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    InvestorContactEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/InvestorContact' }
+    InvestorProjectInterestCreate:
+      type: object
+      required: [contact_id, project_id]
+      properties:
+        contact_id: { type: string }
+        project_id: { type: string }
+        project_block_id: { type: string }
+        source_channel: { type: string }
+        intent_type: { type: string, enum: [callback, visit, materials_only, strategic_partnership] }
+        intent_amount: { type: number, nullable: true }
+        currency_code: { type: string }
+        planned_decision_window: { type: string }
+        intent_note: { type: string }
+        intake_snapshot: { type: object, additionalProperties: true }
+    InvestorProjectInterestEventAppendRequest:
+      type: object
+      required: [to_status, action_code]
+      properties:
+        from_status: { $ref: '#/components/schemas/InvestorIntentLifecycleStatus' }
+        to_status: { $ref: '#/components/schemas/InvestorIntentLifecycleStatus' }
+        action_code: { type: string }
+        operator_type: { type: string, enum: [investor, advisor, ops, system] }
+        operator_ref: { type: string }
+        reason_code: { type: string }
+        event_note: { type: string }
+        snapshot_json: { type: object, additionalProperties: true }
+    InvestorProjectInterestEvent:
+      type: object
+      properties:
+        id: { type: string }
+        from_status: { $ref: '#/components/schemas/InvestorIntentLifecycleStatus' }
+        to_status: { $ref: '#/components/schemas/InvestorIntentLifecycleStatus' }
+        action_code: { type: string }
+        operator_type: { type: string }
+        operator_ref: { type: string, nullable: true }
+        reason_code: { type: string, nullable: true }
+        event_note: { type: string, nullable: true }
+        occurred_at: { type: string, format: date-time }
+    InvestorProjectInterest:
+      type: object
+      properties:
+        id: { type: string }
+        contact_id: { type: string, nullable: true }
+        project_id: { type: string, nullable: true }
+        project_block_id: { type: string, nullable: true }
+        source_channel: { type: string }
+        intent_type: { type: string }
+        intent_amount: { type: number, nullable: true }
+        currency_code: { type: string, nullable: true }
+        planned_decision_window: { type: string, nullable: true }
+        lifecycle_status: { $ref: '#/components/schemas/InvestorIntentLifecycleStatus' }
+        latest_reason_code: { type: string, nullable: true }
+        intent_note: { type: string, nullable: true }
+        advisor_owner: { type: string, nullable: true }
+        last_followup_at: { type: string, format: date-time, nullable: true }
+        next_followup_at: { type: string, format: date-time, nullable: true }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+        project:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            project_name: { type: string }
+            region_name: { type: string, nullable: true }
+        contact:
+          type: object
+          nullable: true
+          properties:
+            id: { type: string }
+            contact_name: { type: string }
+            contact_phone: { type: string, nullable: true }
+            contact_phone_masked: { type: string, nullable: true }
+            organization_name: { type: string, nullable: true }
+            position_title: { type: string, nullable: true }
+        latest_progress:
+          type: object
+          nullable: true
+          properties:
+            advisor_owner: { type: string, nullable: true }
+            last_followup_at: { type: string, format: date-time, nullable: true }
+            next_followup_at: { type: string, format: date-time, nullable: true }
+        event_timeline:
+          type: array
+          items: { $ref: '#/components/schemas/InvestorProjectInterestEvent' }
+    InvestorProjectInterestEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data: { $ref: '#/components/schemas/InvestorProjectInterest' }
+    InvestorProjectInterestListEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/components/schemas/InvestorProjectInterest' }
+                total: { type: integer }
+                page: { type: integer }
+                page_size: { type: integer }
+    InvestorMaterialAccessRequest:
+      type: object
+      required: [project_id, material_type, material_key]
+      properties:
+        contact_id: { type: string }
+        interest_id: { type: string }
+        project_id: { type: string }
+        project_block_id: { type: string }
+        material_type: { type: string }
+        material_key: { type: string }
+        access_action: { type: string, enum: [view, download, share_link] }
+        access_source: { type: string }
+        access_snapshot: { type: object, additionalProperties: true }
+    InvestorMessage:
+      type: object
+      properties:
+        id: { type: string }
+        message_type: { type: string }
+        title: { type: string }
+        body: { type: string }
+        is_read: { type: boolean }
+        project_id: { type: string, nullable: true }
+        created_at: { type: string, format: date-time }
+    InvestorMessageListEnvelope:
+      allOf:
+        - { $ref: '#/components/schemas/EnvelopeBase' }
+        - type: object
+          properties:
+            data:
+              type: object
+              properties:
+                items:
+                  type: array
+                  items: { $ref: '#/components/schemas/InvestorMessage' }
+                total: { type: integer }
+                page: { type: integer }
+                page_size: { type: integer }
     UatCaseCreate: { type: object, properties: { caseCode: { type: string }, roleType: { type: string }, scenarioName: { type: string }, expectedResult: { type: string } } }
     CreateConversationRequest: { type: object, properties: { topic: { type: string } } }
     SendMessageRequest: { type: object, required: [message], properties: { message: { type: string } } }

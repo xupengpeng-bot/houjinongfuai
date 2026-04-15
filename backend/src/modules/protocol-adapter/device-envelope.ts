@@ -1,4 +1,5 @@
 export interface DeviceEnvelope {
+  protocol: string;
   protocolVersion: string;
   imei: string;
   msgId: string;
@@ -6,6 +7,7 @@ export interface DeviceEnvelope {
   msgType: string;
   deviceTs: string | null;
   serverRxTs: string;
+  correlationId?: string | null;
   sessionRef?: string | null;
   runState?: string | null;
   powerState?: string | null;

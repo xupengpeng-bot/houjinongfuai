@@ -20,6 +20,7 @@ import { DataScopeService } from './data-scope.service';
 import { EffectivePolicyResolver } from './effective-policy.resolver';
 import { WellRuntimePolicyReadModel, WellRuntimePolicyStatus } from './policy.dto';
 import { PolicyRepository } from './policy.repository';
+import { BillingModule } from '../billing/billing.module';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 
@@ -338,10 +339,10 @@ class PolicyUiService {
           scenario_template_id: null,
           device_type_id: null,
           billing_package_id: policy.billingPackageId,
-          priority_chain: ['well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default']
+          priority_chain: ['billing_subject_policy', 'well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default']
         },
         effective_rule_snapshot: {
-          priority_chain: ['well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default'],
+          priority_chain: ['billing_subject_policy', 'well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default'],
           policy,
           relation: null,
           note: 'No active pump-valve relation found for this well'
@@ -394,10 +395,10 @@ class PolicyUiService {
             scenario_template_id: null,
             device_type_id: null,
             billing_package_id: policy.billingPackageId,
-            priority_chain: ['well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default']
+            priority_chain: ['billing_subject_policy', 'well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default']
           },
           effective_rule_snapshot: {
-            priority_chain: ['well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default'],
+            priority_chain: ['billing_subject_policy', 'well_runtime_policy', 'pump_valve_relation', 'interaction_policy', 'scenario_template', 'device_type_default'],
             policy,
             relation,
             resolution_error: {
@@ -454,6 +455,7 @@ class PolicyController {
 }
 
 @Module({
+  imports: [BillingModule],
   controllers: [PolicyController, DataScopeController],
   providers: [PolicyRepository, EffectivePolicyResolver, DataScopeRepository, DataScopeService, PolicyUiService],
   exports: [PolicyRepository, EffectivePolicyResolver, DataScopeRepository, DataScopeService]

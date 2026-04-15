@@ -1,0 +1,15 @@
+{
+  "v": 1,
+  "t": "NK",
+  "i": "860000000000001",
+  "m": "nack-0501",
+  "s": 501,
+  "ts": "2026-04-07T13:22:10Z",
+  "c": "CMD-VFD-FREQ-0501",
+  "p": {
+    "result": "rejected",
+    "ac": "upg",
+    "rc": "MN",
+    "message": "target module is not enabled in current config"
+  }
+}

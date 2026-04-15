@@ -1,5 +1,17 @@
 # Project Execution Rules
 
+## Workspace Startup
+
+- This repository is only one part of the multi-repo workspace:
+  - `D:\Develop\houji\houjinongfuAI-Cursor`
+- Before starting a new backend thread, first read:
+  1. `..\AGENTS.md`
+  2. `..\docs\工作环境总说明.md`
+  3. `..\docs\新线程启动必读.md`
+  4. `..\docs\DEVELOPMENT-STATUS.md`
+  5. `..\docs\工作区整体环境配置与开发规范.md`
+- Then come back to this file and continue with backend-specific rules.
+
 ## Scope
 
 - Repository: the currently opened repository root

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import json
+import math
 import shutil
 import textwrap
+from collections import defaultdict, deque
 from pathlib import Path
 
 import ezdxf
@@ -19,17 +21,17 @@ META_NAME = "houji-complex-validation-template.metadata.json"
 MANIFEST_NAME = "houji-complex-validation-template.import.json"
 
 LAYER_SPECS = [
-    ("HJ_WELL", 1, "机井"),
-    ("HJ_PUMP", 3, "泵站"),
-    ("HJ_VALVE", 30, "阀门/电磁阀"),
+    ("HJ_SOURCE_STATION", 1, "水源点位（机井 / 泵站）"),
+    ("HJ_VALVE", 30, "阀门 / 电磁阀"),
     ("HJ_PIPE", 5, "管道"),
     ("HJ_OUTLET", 6, "出水口"),
     ("HJ_SENSOR", 140, "传感器"),
 ]
 
 LAYER_MAPPING = {
-    "well_layer": "HJ_WELL",
-    "pump_layer": "HJ_PUMP",
+    "source_station_layer": "HJ_SOURCE_STATION",
+    "well_layer": "HJ_SOURCE_STATION",
+    "pump_layer": "HJ_SOURCE_STATION",
     "valve_layer": "HJ_VALVE",
     "pipe_layer": "HJ_PIPE",
     "outlet_layer": "HJ_OUTLET",
@@ -37,23 +39,35 @@ LAYER_MAPPING = {
 }
 
 BLOCK_NAMES = {
-    "well": "HJ_WELL_BLOCK",
-    "pump": "HJ_PUMP_BLOCK",
+    "source_station": "HJ_SOURCE_STATION_BLOCK",
     "valve": "HJ_VALVE_BLOCK",
     "outlet": "HJ_OUTLET_BLOCK",
     "sensor": "HJ_SENSOR_BLOCK",
 }
 
+ZONE_OUTLET_DISTRIBUTION = [3, 3, 3, 3, 3]
 
-def point(code: str, kind: str, x: float, y: float) -> dict:
+PUMP_PROFILES = [
+    {"rated_power_kw": 37.5, "rated_head_m": 108, "rated_flow_m3h": 56, "well_depth_m": 98, "source_kind": "groundwater"},
+    {"rated_power_kw": 18.5, "rated_head_m": 96, "rated_flow_m3h": 34, "well_depth_m": 84, "source_kind": "groundwater"},
+    {"rated_power_kw": 22.0, "rated_head_m": 92, "rated_flow_m3h": 40, "well_depth_m": 88, "source_kind": "groundwater"},
+    {"rated_power_kw": 15.0, "rated_head_m": 42, "rated_flow_m3h": 46, "well_depth_m": 0, "source_kind": "surface_water"},
+    {"rated_power_kw": 15.0, "rated_head_m": 38, "rated_flow_m3h": 44, "well_depth_m": 0, "source_kind": "river"},
+]
+
+OUTLET_TARGET_FLOWS = [8, 9, 10, 8, 11, 9, 10, 12, 9, 8, 10, 9, 11, 12, 10]
+OUTLET_MIN_PRESSURES = [18, 19, 20, 18, 21, 19, 20, 22, 19, 18, 21, 19, 22, 23, 21]
+SENSOR_KIND_SEQUENCE = ["flow", "pressure", "flow", "pressure", "pressure", "pressure"]
+
+
+def point(code: str, kind: str, x: float, y: float, **extra: object) -> dict:
     layer = {
-        "well": "HJ_WELL",
-        "pump": "HJ_PUMP",
+        "source_station": "HJ_SOURCE_STATION",
         "valve": "HJ_VALVE",
         "outlet": "HJ_OUTLET",
         "sensor": "HJ_SENSOR",
     }[kind]
-    return {"code": code, "kind": kind, "layer": layer, "point": (x, y)}
+    return {"code": code, "kind": kind, "layer": layer, "point": (x, y), **extra}
 
 
 def pipe(code: str, *points: tuple[float, float]) -> dict:
@@ -61,142 +75,101 @@ def pipe(code: str, *points: tuple[float, float]) -> dict:
 
 
 POINTS = [
-    point("W01", "well", 60, 390),
-    point("W02", "well", 180, 390),
-    point("W03", "well", 260, 390),
-    point("W04", "well", 420, 390),
-    point("W05", "well", 500, 390),
-    point("P01", "pump", 100, 360),
-    point("P02", "pump", 180, 360),
-    point("P03", "pump", 260, 360),
-    point("P04", "pump", 420, 360),
-    point("P05", "pump", 500, 360),
-    point("V01", "valve", 100, 340),
+    point("ST01", "source_station", 80, 360, profile_index=0),
+    point("ST02", "source_station", 180, 360, profile_index=1),
+    point("ST03", "source_station", 300, 360, profile_index=2),
+    point("ST04", "source_station", 460, 360, profile_index=3),
+    point("ST05", "source_station", 560, 360, profile_index=4),
+    point("V01", "valve", 80, 340),
     point("V02", "valve", 180, 340),
-    point("V03", "valve", 260, 340),
-    point("V04", "valve", 420, 340),
-    point("V05", "valve", 500, 340),
-    point("V06", "valve", 140, 280),
-    point("V07", "valve", 300, 280),
-    point("V08", "valve", 460, 280),
-    point("V09", "valve", 140, 210),
-    point("V10", "valve", 300, 210),
-    point("V11", "valve", 460, 210),
-    point("V12", "valve", 220, 280),
-    point("V13", "valve", 380, 280),
-    point("V14", "valve", 260, 240),
-    point("V15", "valve", 420, 240),
-    point("S01", "sensor", 160, 320),
-    point("S02", "sensor", 280, 320),
-    point("S03", "sensor", 440, 320),
-    point("S04", "sensor", 180, 240),
-    point("S05", "sensor", 340, 240),
-    point("S06", "sensor", 140, 220),
-    point("S07", "sensor", 300, 200),
-    point("S08", "sensor", 460, 140),
-    point("O01", "outlet", 80, 160),
-    point("O02", "outlet", 140, 150),
-    point("O03", "outlet", 200, 160),
-    point("O04", "outlet", 220, 145),
-    point("O05", "outlet", 260, 135),
-    point("O06", "outlet", 300, 145),
-    point("O07", "outlet", 340, 135),
-    point("O08", "outlet", 380, 145),
-    point("O09", "outlet", 400, 140),
-    point("O10", "outlet", 440, 130),
-    point("O11", "outlet", 480, 140),
-    point("O12", "outlet", 520, 130),
-    point("O13", "outlet", 60, 85),
-    point("O14", "outlet", 100, 75),
-    point("O15", "outlet", 140, 85),
-    point("O16", "outlet", 180, 75),
-    point("O17", "outlet", 220, 85),
-    point("O18", "outlet", 240, 75),
-    point("O19", "outlet", 280, 65),
-    point("O20", "outlet", 320, 75),
-    point("O21", "outlet", 360, 65),
-    point("O22", "outlet", 410, 65),
-    point("O23", "outlet", 460, 55),
-    point("O24", "outlet", 510, 65),
+    point("V03", "valve", 300, 340),
+    point("V04", "valve", 460, 340),
+    point("V05", "valve", 560, 340),
+    point("V06", "valve", 200, 275),
+    point("V07", "valve", 300, 275),
+    point("V08", "valve", 420, 275),
+    point("V09", "valve", 120, 215),
+    point("V10", "valve", 200, 215),
+    point("V11", "valve", 300, 215),
+    point("V12", "valve", 420, 215),
+    point("V13", "valve", 500, 215),
+    point("S01", "sensor", 240, 310),
+    point("S02", "sensor", 500, 310),
+    point("S03", "sensor", 300, 240),
+    point("S04", "sensor", 200, 170),
+    point("S05", "sensor", 300, 170),
+    point("S06", "sensor", 500, 175),
+    point("O01", "outlet", 60, 118),
+    point("O02", "outlet", 100, 104),
+    point("O03", "outlet", 140, 118),
+    point("O04", "outlet", 170, 112),
+    point("O05", "outlet", 210, 98),
+    point("O06", "outlet", 250, 112),
+    point("O07", "outlet", 250, 108),
+    point("O08", "outlet", 290, 94),
+    point("O09", "outlet", 330, 108),
+    point("O10", "outlet", 350, 112),
+    point("O11", "outlet", 390, 98),
+    point("O12", "outlet", 430, 112),
+    point("O13", "outlet", 460, 118),
+    point("O14", "outlet", 500, 104),
+    point("O15", "outlet", 540, 118),
 ]
 
 PIPES = [
-    pipe("PW01", (60, 390), (100, 360)),
-    pipe("PW02", (180, 390), (180, 360)),
-    pipe("PW03", (260, 390), (260, 360)),
-    pipe("PW04", (420, 390), (420, 360)),
-    pipe("PW05", (500, 390), (500, 360)),
-    pipe("PD01", (100, 360), (100, 340), (100, 320)),
-    pipe("PD02", (180, 360), (180, 340), (180, 320)),
-    pipe("PD03", (260, 360), (260, 340), (260, 320)),
-    pipe("PD04", (420, 360), (420, 340), (420, 320)),
-    pipe("PD05", (500, 360), (500, 340), (500, 320)),
+    pipe("SS01", (80, 360), (80, 340), (80, 310)),
+    pipe("SS02", (180, 360), (180, 340), (180, 310)),
+    pipe("SS03", (300, 360), (300, 340), (300, 310)),
+    pipe("SS04", (460, 360), (460, 340), (460, 310)),
+    pipe("SS05", (560, 360), (560, 340), (560, 310)),
     pipe(
         "TRUNK_TOP",
-        (100, 320),
-        (140, 320),
-        (180, 320),
-        (220, 320),
-        (260, 320),
-        (300, 320),
-        (340, 320),
-        (380, 320),
-        (420, 320),
-        (460, 320),
-        (500, 320),
+        (80, 310),
+        (140, 310),
+        (180, 310),
+        (240, 310),
+        (300, 310),
+        (380, 310),
+        (460, 310),
+        (500, 310),
+        (560, 310),
     ),
-    pipe("TRUNK_BOTTOM", (140, 240), (220, 240), (300, 240), (380, 240), (460, 240)),
-    pipe("INTERTIE_01", (220, 320), (220, 280), (220, 240)),
-    pipe("INTERTIE_02", (380, 320), (380, 280), (380, 240)),
-    pipe("ZONE_A_STEM", (140, 320), (140, 280), (140, 220), (140, 190)),
-    pipe("ZONE_A_LATERAL", (80, 190), (140, 190), (200, 190)),
-    pipe("ZONE_A_DROP_01", (80, 190), (80, 160)),
-    pipe("ZONE_A_DROP_02", (140, 190), (140, 150)),
-    pipe("ZONE_A_DROP_03", (200, 190), (200, 160)),
-    pipe("ZONE_B_STEM", (300, 320), (300, 280), (300, 200), (300, 180)),
-    pipe("ZONE_B_LATERAL", (220, 180), (260, 180), (300, 180), (340, 180), (380, 180)),
-    pipe("ZONE_B_DROP_04", (220, 180), (220, 145)),
-    pipe("ZONE_B_DROP_05", (260, 180), (260, 135)),
-    pipe("ZONE_B_DROP_06", (300, 180), (300, 145)),
-    pipe("ZONE_B_DROP_07", (340, 180), (340, 135)),
-    pipe("ZONE_B_DROP_08", (380, 180), (380, 145)),
-    pipe("ZONE_C_STEM", (460, 320), (460, 280), (460, 175)),
-    pipe("ZONE_C_LATERAL", (400, 175), (440, 175), (480, 175), (520, 175)),
-    pipe("ZONE_C_DROP_09", (400, 175), (400, 140)),
-    pipe("ZONE_C_DROP_10", (440, 175), (440, 130)),
-    pipe("ZONE_C_DROP_11", (480, 175), (480, 140)),
-    pipe("ZONE_C_DROP_12", (520, 175), (520, 130)),
-    pipe("ZONE_D_STEM", (140, 240), (140, 210), (140, 120)),
-    pipe("ZONE_D_LATERAL", (60, 120), (100, 120), (140, 120), (180, 120), (220, 120)),
-    pipe("ZONE_D_DROP_13", (60, 120), (60, 85)),
-    pipe("ZONE_D_DROP_14", (100, 120), (100, 75)),
-    pipe("ZONE_D_DROP_15", (140, 120), (140, 85)),
-    pipe("ZONE_D_DROP_16", (180, 120), (180, 75)),
-    pipe("ZONE_D_DROP_17", (220, 120), (220, 85)),
-    pipe("ZONE_E_STEM", (300, 240), (300, 210), (300, 110)),
-    pipe("ZONE_E_LATERAL", (240, 110), (280, 110), (320, 110), (360, 110)),
-    pipe("ZONE_E_DROP_18", (240, 110), (240, 75)),
-    pipe("ZONE_E_DROP_19", (280, 110), (280, 65)),
-    pipe("ZONE_E_DROP_20", (320, 110), (320, 75)),
-    pipe("ZONE_E_DROP_21", (360, 110), (360, 65)),
-    pipe("ZONE_F_STEM", (460, 240), (460, 210), (460, 140), (460, 100)),
-    pipe("ZONE_F_LATERAL", (410, 100), (460, 100), (510, 100)),
-    pipe("ZONE_F_DROP_22", (410, 100), (410, 65)),
-    pipe("ZONE_F_DROP_23", (460, 100), (460, 55)),
-    pipe("ZONE_F_DROP_24", (510, 100), (510, 65)),
+    pipe("INTERTIE_01", (180, 310), (180, 275), (200, 275), (200, 240)),
+    pipe("INTERTIE_02", (300, 310), (300, 275), (300, 240)),
+    pipe("INTERTIE_03", (460, 310), (460, 275), (420, 275), (420, 240)),
+    pipe("TRUNK_MIDDLE_LEFT", (300, 240), (200, 240), (120, 240)),
+    pipe("TRUNK_MIDDLE_RIGHT", (300, 240), (420, 240), (500, 240)),
+    pipe("ZONE_A_STEM", (120, 240), (120, 215), (120, 150)),
+    pipe("ZONE_A_LATERAL_LEFT", (120, 150), (100, 150), (60, 150)),
+    pipe("ZONE_A_LATERAL_RIGHT", (120, 150), (140, 150)),
+    pipe("ZONE_A_DROP_01", (60, 150), (60, 118)),
+    pipe("ZONE_A_DROP_02", (100, 150), (100, 104)),
+    pipe("ZONE_A_DROP_03", (140, 150), (140, 118)),
+    pipe("ZONE_B_STEM", (200, 240), (200, 215), (200, 170), (200, 145)),
+    pipe("ZONE_B_LATERAL_LEFT", (200, 145), (170, 145)),
+    pipe("ZONE_B_LATERAL_RIGHT", (200, 145), (210, 145), (250, 145)),
+    pipe("ZONE_B_DROP_04", (170, 145), (170, 112)),
+    pipe("ZONE_B_DROP_05", (210, 145), (210, 98)),
+    pipe("ZONE_B_DROP_06", (250, 145), (250, 112)),
+    pipe("ZONE_C_STEM", (300, 240), (300, 215), (300, 170), (300, 140)),
+    pipe("ZONE_C_LATERAL_LEFT", (300, 140), (290, 140), (250, 140)),
+    pipe("ZONE_C_LATERAL_RIGHT", (300, 140), (330, 140)),
+    pipe("ZONE_C_DROP_07", (250, 140), (250, 108)),
+    pipe("ZONE_C_DROP_08", (290, 140), (290, 94)),
+    pipe("ZONE_C_DROP_09", (330, 140), (330, 108)),
+    pipe("ZONE_D_STEM", (420, 240), (420, 215), (420, 145)),
+    pipe("ZONE_D_LATERAL_LEFT", (420, 145), (390, 145), (350, 145)),
+    pipe("ZONE_D_LATERAL_RIGHT", (420, 145), (430, 145)),
+    pipe("ZONE_D_DROP_10", (350, 145), (350, 112)),
+    pipe("ZONE_D_DROP_11", (390, 145), (390, 98)),
+    pipe("ZONE_D_DROP_12", (430, 145), (430, 112)),
+    pipe("ZONE_E_STEM", (500, 240), (500, 215), (500, 175), (500, 150)),
+    pipe("ZONE_E_LATERAL_LEFT", (500, 150), (460, 150)),
+    pipe("ZONE_E_LATERAL_RIGHT", (500, 150), (540, 150)),
+    pipe("ZONE_E_DROP_13", (460, 150), (460, 118)),
+    pipe("ZONE_E_DROP_14", (500, 150), (500, 104)),
+    pipe("ZONE_E_DROP_15", (540, 150), (540, 118)),
 ]
-
-PUMP_PROFILES = [
-    {"rated_power_kw": 37.5, "rated_head_m": 110, "rated_flow_m3h": 58, "well_depth_m": 96},
-    {"rated_power_kw": 13.5, "rated_head_m": 90, "rated_flow_m3h": 30, "well_depth_m": 82},
-    {"rated_power_kw": 37.5, "rated_head_m": 90, "rated_flow_m3h": 54, "well_depth_m": 88},
-    {"rated_power_kw": 13.5, "rated_head_m": 110, "rated_flow_m3h": 28, "well_depth_m": 101},
-    {"rated_power_kw": 37.5, "rated_head_m": 110, "rated_flow_m3h": 62, "well_depth_m": 108},
-]
-
-OUTLET_TARGET_FLOWS = [8, 10, 12, 9, 7, 11, 10, 9, 12, 8, 11, 10, 6, 7, 8, 6, 9, 7, 8, 9, 8, 10, 9, 11]
-OUTLET_MIN_PRESSURES = [18, 20, 22, 19, 18, 23, 21, 20, 24, 18, 22, 21, 17, 18, 19, 17, 20, 18, 19, 20, 19, 21, 20, 22]
-SENSOR_KIND_SEQUENCE = ["pressure", "flow", "pressure", "flow", "pressure", "level", "pressure", "flow"]
 
 
 def stable_jitter(code: str) -> int:
@@ -204,19 +177,19 @@ def stable_jitter(code: str) -> int:
 
 
 def altitude_for(code: str, x: float, y: float) -> float:
-    gradient_component = ((390 - y) / 335.0) * 26.0
-    jitter_component = (stable_jitter(code) % 8)
-    return round(max(8.0, min(48.0, 8.0 + gradient_component + jitter_component)), 1)
+    gradient_component = ((390 - y) / 300.0) * 24.0
+    jitter_component = stable_jitter(code) % 7
+    return round(max(8.0, min(42.0, 8.0 + gradient_component + jitter_component)), 1)
 
 
 def outlet_profile(index: int) -> dict:
     target_flow = OUTLET_TARGET_FLOWS[index % len(OUTLET_TARGET_FLOWS)]
     min_pressure = OUTLET_MIN_PRESSURES[index % len(OUTLET_MIN_PRESSURES)]
-    irrigation_area = round(target_flow * 3.8 + (index % 4) * 2.5, 1)
+    irrigation_area = round(target_flow * 3.6 + (index % 3) * 2.2, 1)
     return {
         "target_flow_m3h": target_flow,
         "min_pressure_m": min_pressure,
-        "max_pressure_m": min_pressure + 35,
+        "max_pressure_m": min_pressure + 32,
         "irrigation_area_mu": irrigation_area,
     }
 
@@ -224,14 +197,12 @@ def outlet_profile(index: int) -> dict:
 def sensor_profile(index: int) -> dict:
     kind = SENSOR_KIND_SEQUENCE[index % len(SENSOR_KIND_SEQUENCE)]
     if kind == "flow":
-        return {"sensor_kind": kind, "range_min": 0, "range_max": 80}
-    if kind == "level":
-        return {"sensor_kind": kind, "range_min": 0, "range_max": 25}
+        return {"sensor_kind": kind, "range_min": 0, "range_max": 100}
     return {"sensor_kind": kind, "range_min": 0, "range_max": 160}
 
 
 def valve_profile(index: int) -> dict:
-    kv_base = 170 + (index % 5) * 20
+    kv_base = 180 + (index % 4) * 18
     if index < 5:
         kv_base += 40
     return {
@@ -246,27 +217,78 @@ def pipe_type_for(code: str) -> str:
 
 
 def pipe_diameter_for(code: str) -> int:
-    if code.startswith("TRUNK_TOP"):
+    if code == "TRUNK_TOP":
         return 280
-    if code.startswith("TRUNK_BOTTOM"):
-        return 240
+    if code.startswith("TRUNK_MIDDLE"):
+        return 220
     if code.startswith("INTERTIE"):
-        return 220
-    if code.startswith("PW"):
-        return 220
-    if code.startswith("PD"):
+        return 200
+    if code.startswith("SS"):
         return 200
     if "STEM" in code:
-        return 180
+        return 160
     if "LATERAL" in code:
-        return 140
+        return 125
     if "DROP" in code:
-        return 110
-    return 160
+        return 90
+    return 140
+
+
+def build_source_station_node(item: dict) -> dict:
+    code = item["code"]
+    x, y = item["point"]
+    profile = PUMP_PROFILES[item["profile_index"]]
+    source_kind = profile["source_kind"]
+    altitude = altitude_for(code, x, y)
+
+    node_params = {
+        "source_kind": source_kind,
+        "design_flow_m3h": profile["rated_flow_m3h"],
+        "pump_head_m": profile["rated_head_m"],
+        "rated_flow_m3h": profile["rated_flow_m3h"],
+        "rated_head_m": profile["rated_head_m"],
+        "rated_power_kw": profile["rated_power_kw"],
+    }
+    if source_kind == "groundwater":
+        node_params.update(
+            {
+                "well_depth_m": profile["well_depth_m"],
+                "static_water_level_m": round(profile["well_depth_m"] * 0.35, 1),
+                "dynamic_water_level_m": round(profile["well_depth_m"] * 0.52, 1),
+            }
+        )
+
+    return {
+        "node_code": code,
+        "node_name": code,
+        "node_type": "source_station",
+        "asset_id": None,
+        "asset_ids": [],
+        "device_ids": [],
+        "node_params": node_params,
+        "pump_units": [
+            {
+                "unit_code": f"{code}-P01",
+                "unit_name": f"{code}-PUMP-01",
+                "enabled": True,
+                "rated_flow_m3h": profile["rated_flow_m3h"],
+                "rated_head_m": profile["rated_head_m"],
+                "rated_power_kw": profile["rated_power_kw"],
+                "source_kind": source_kind,
+                "device_role": "pump_unit",
+                "asset_ids": [],
+                "device_ids": [],
+            }
+        ],
+        "cad_x": x,
+        "cad_y": y,
+        "latitude": None,
+        "longitude": None,
+        "altitude": altitude,
+    }
 
 
 def build_graph_draft() -> dict:
-    points_by_coord = {(float(x), float(y)): item for item in POINTS for x, y in [item["point"]]}
     nodes: list[dict] = []
     node_codes_by_coord: dict[tuple[float, float], str] = {}
     junction_counter = 1
@@ -276,60 +298,59 @@ def build_graph_draft() -> dict:
         x, y = item["point"]
         kind = item["kind"]
         altitude = altitude_for(code, x, y)
-        node_params: dict = {}
-        pump_units: list[dict] = []
 
-        if kind in {"well", "pump"}:
-            profile = PUMP_PROFILES[int(code[-2:]) - 1]
-            if kind == "well":
-                node_params = {
-                    "well_depth_m": profile["well_depth_m"],
-                    "design_flow_m3h": round(profile["rated_flow_m3h"] * 0.95, 1),
-                    "pump_head_m": profile["rated_head_m"],
-                    "rated_power_kw": profile["rated_power_kw"],
-                }
-            else:
-                node_params = {
-                    "rated_flow_m3h": profile["rated_flow_m3h"],
-                    "rated_head_m": profile["rated_head_m"],
-                    "rated_power_kw": profile["rated_power_kw"],
-                }
-            pump_units = [
-                {
-                    "unit_code": f"{code}-U01",
-                    "unit_name": f"{code}-PUMP-01",
-                    "enabled": True,
-                    "rated_flow_m3h": profile["rated_flow_m3h"],
-                    "rated_head_m": profile["rated_head_m"],
-                    "rated_power_kw": profile["rated_power_kw"],
-                    "asset_ids": [],
-                    "device_ids": [],
-                }
-            ]
+        if kind == "source_station":
+            node = build_source_station_node(item)
         elif kind == "valve":
-            node_params = valve_profile(int(code[-2:]) - 1)
-        elif kind == "outlet":
-            node_params = outlet_profile(int(code[-2:]) - 1)
-        elif kind == "sensor":
-            node_params = sensor_profile(int(code[-2:]) - 1)
-
-        nodes.append(
-            {
+            node = {
                 "node_code": code,
                 "node_name": code,
-                "node_type": kind,
+                "node_type": "valve",
                 "asset_id": None,
                 "asset_ids": [],
                 "device_ids": [],
-                "node_params": node_params,
-                "pump_units": pump_units,
+                "node_params": valve_profile(int(code[-2:]) - 1),
+                "pump_units": [],
                 "cad_x": x,
                 "cad_y": y,
                 "latitude": None,
                 "longitude": None,
                 "altitude": altitude,
             }
-        )
+        elif kind == "outlet":
+            node = {
+                "node_code": code,
+                "node_name": code,
+                "node_type": "outlet",
+                "asset_id": None,
+                "asset_ids": [],
+                "device_ids": [],
+                "node_params": outlet_profile(int(code[-2:]) - 1),
+                "pump_units": [],
+                "cad_x": x,
+                "cad_y": y,
+                "latitude": None,
+                "longitude": None,
+                "altitude": altitude,
+            }
+        else:
+            node = {
+                "node_code": code,
+                "node_name": code,
+                "node_type": "sensor",
+                "asset_id": None,
+                "asset_ids": [],
+                "device_ids": [],
+                "node_params": sensor_profile(int(code[-2:]) - 1),
+                "pump_units": [],
+                "cad_x": x,
+                "cad_y": y,
+                "latitude": None,
+                "longitude": None,
+                "altitude": altitude,
+            }
+
+        nodes.append(node)
         node_codes_by_coord[(float(x), float(y))] = code
 
     def resolve_node_code(coord: tuple[float, float]) -> tuple[str, float]:
@@ -339,6 +360,7 @@ def build_graph_draft() -> dict:
             code = node_codes_by_coord[key]
             altitude = next(node["altitude"] for node in nodes if node["node_code"] == code)
             return code, altitude
+
         code = f"J{junction_counter:03d}"
         junction_counter += 1
         altitude = altitude_for(code, key[0], key[1])
@@ -370,16 +392,13 @@ def build_graph_draft() -> dict:
             end = points[index + 1]
             from_code, from_altitude = resolve_node_code(start)
             to_code, to_altitude = resolve_node_code(end)
-            dx = end[0] - start[0]
-            dy = end[1] - start[1]
-            length = round((dx * dx + dy * dy) ** 0.5, 2)
             pipes.append(
                 {
                     "pipe_code": item["code"] if len(points) == 2 else f"{item['code']}_{index + 1:02d}",
                     "pipe_type": pipe_type_for(item["code"]),
                     "from_node_code": from_code,
                     "to_node_code": to_code,
-                    "length_m": length,
+                    "length_m": round(math.dist(start, end), 2),
                     "diameter_mm": pipe_diameter_for(item["code"]),
                     "geometry_points": [
                         {"x": float(start[0]), "y": float(start[1]), "z": from_altitude},
@@ -396,6 +415,57 @@ def build_graph_draft() -> dict:
     }
 
 
+def find_unreachable_outlets(graph_draft: dict) -> list[str]:
+    directed: dict[str, set[str]] = defaultdict(set)
+    source_nodes: set[str] = set()
+    outlet_nodes: set[str] = set()
+
+    for node in graph_draft["nodes"]:
+        node_type = str(node.get("node_type") or "").strip().lower()
+        node_code = str(node.get("node_code") or "").strip()
+        if not node_code:
+            continue
+        if node_type == "source_station":
+            source_nodes.add(node_code)
+        elif node_type == "outlet":
+            outlet_nodes.add(node_code)
+
+    for pipe_item in graph_draft["pipes"]:
+        start = str(pipe_item.get("from_node_code") or "").strip()
+        end = str(pipe_item.get("to_node_code") or "").strip()
+        if start and end:
+            directed[start].add(end)
+
+    unreachable: list[str] = []
+    for outlet_code in sorted(outlet_nodes):
+        queue = deque(source_nodes)
+        visited = set(source_nodes)
+        reachable = False
+        while queue:
+            current = queue.popleft()
+            if current == outlet_code:
+                reachable = True
+                break
+            for adjacent in directed.get(current, set()):
+                if adjacent in visited:
+                    continue
+                visited.add(adjacent)
+                queue.append(adjacent)
+        if not reachable:
+            unreachable.append(outlet_code)
+
+    return unreachable
+
+
+def validate_graph_draft(graph_draft: dict) -> None:
+    unreachable_outlets = find_unreachable_outlets(graph_draft)
+    if unreachable_outlets:
+        raise ValueError(
+            "complex validation template has outlets unreachable from source stations in directed graph: "
+            + ", ".join(unreachable_outlets)
+        )
+
+
 def add_layers(doc: ezdxf.EzDxfDocument) -> None:
     for name, color_index, _label in LAYER_SPECS:
         if name not in doc.layers:
@@ -403,16 +473,11 @@ def add_layers(doc: ezdxf.EzDxfDocument) -> None:
 
 
 def ensure_symbol_blocks(doc: ezdxf.EzDxfDocument) -> None:
-    if BLOCK_NAMES["well"] not in doc.blocks:
-        block = doc.blocks.new(name=BLOCK_NAMES["well"])
-        block.add_circle((0, 0), radius=4.5)
+    if BLOCK_NAMES["source_station"] not in doc.blocks:
+        block = doc.blocks.new(name=BLOCK_NAMES["source_station"])
+        block.add_circle((0, 0), radius=4.8)
         block.add_line((-2.2, 0), (2.2, 0))
         block.add_line((0, -2.2), (0, 2.2))
-
-    if BLOCK_NAMES["pump"] not in doc.blocks:
-        block = doc.blocks.new(name=BLOCK_NAMES["pump"])
-        block.add_circle((0, 0), radius=5.0)
-        block.add_lwpolyline([(-1.8, -2.4), (2.5, 0), (-1.8, 2.4), (-1.8, -2.4)])
 
     if BLOCK_NAMES["valve"] not in doc.blocks:
         block = doc.blocks.new(name=BLOCK_NAMES["valve"])
@@ -452,115 +517,141 @@ def create_doc() -> ezdxf.EzDxfDocument:
     return doc
 
 
-def write_spec(output_dir: Path) -> None:
+def build_counts(graph_draft: dict) -> dict:
+    return {
+        "source_stations": sum(1 for item in POINTS if item["kind"] == "source_station"),
+        "pump_units": sum(1 for node in graph_draft["nodes"] for unit in node["pump_units"] if unit.get("enabled", True)),
+        "valves": sum(1 for item in POINTS if item["kind"] == "valve"),
+        "outlets": sum(1 for item in POINTS if item["kind"] == "outlet"),
+        "sensors": sum(1 for item in POINTS if item["kind"] == "sensor"),
+        "pipes": len(PIPES),
+    }
+
+
+def write_spec(output_dir: Path, graph_draft: dict) -> None:
     rows = "\n".join(f"| `{name}` | {label} |" for name, _color, label in LAYER_SPECS)
+    counts = build_counts(graph_draft)
     content = f"""
-# 厚基农服复杂管网 DXF 验证样图说明
+    # 厚基农服复杂管网 DXF 验证模板说明
 
-## 1. 文件说明
-- 样图文件：`{DXF_NAME}`
-- 说明文档：`{SPEC_NAME}`
-- sidecar / 映射示例：`{MANIFEST_NAME}`
+    ## 1. 文件内容
+    - 模板图纸：`{DXF_NAME}`
+    - Sidecar 清单：`{MANIFEST_NAME}`
+    - 元数据：`{META_NAME}`
 
-## 2. 当前样图包含内容
-- 5 个机井
-- 5 个泵站
-- 15 个阀门 / 电磁阀
-- 24 个出水口
-- 8 个传感器
-- 49 段管道中心线
+    ## 2. 拓扑特点
+    - 5 个水源点位先汇入上部主干管。
+    - 通过 3 条联络竖管把上部主干接入中部配水干管。
+    - 中部配水干管下挂 5 个灌水分区，每个分区 3 个出水口，共 15 个出水口。
+    - 走线遵循“上部主干 -> 中部配水干管 -> 分区竖向支干 -> 田间支管 -> 出水口支线”，避免无意义折返。
+    - 供水节点统一使用 `source_station`，机井 / 泵站通过 `source_kind` 区分。
+    - 物理泵不再作为独立顶层节点，而是挂在 `pump_units[]` 下。
 
-## 3. 拓扑特征
-- 上层主干管为一条连续供水总管，5 台泵分别从不同入口注入。
-- 下层为一条环形次级母管，通过 2 条联络管与上层主干相连。
-- 一共布置 6 个灌溉分区，出水口分布并不均匀，分别为 `3 / 5 / 4 / 5 / 4 / 3`。
-- 下层分区可以通过联络管获得多泵供水，不是简单的一泵一支路或一泵四口。
-- 适合验证：多泵择优供水、分区联动、阀门高亮、环状管网寻路、复杂出水口组合求解。
+    ## 3. 当前模板规模
+    - {counts["source_stations"]} 个水源点位
+    - {counts["pump_units"]} 个 `pump_units`
+    - {counts["valves"]} 个阀门
+    - {counts["outlets"]} 个出水口
+    - {counts["sensors"]} 个传感器
+    - {counts["pipes"]} 条绘图管线
 
-## 4. 图层标准
-| 图层名 | 中文说明 |
-| --- | --- |
-{rows}
+    ## 4. 图层标准
+    | 图层名 | 中文说明 |
+    | --- | --- |
+    {rows}
 
-## 5. 验证建议
-1. 先单独开启上层分区出水口，确认系统能只联动必要泵阀。
-2. 再同时开启上层与下层多个分区，确认联络管和下层母管参与求解。
-3. 验证某一台泵可满足需求时，其他备选泵不应误亮支路。
-4. 验证关闭某个分区后，其他仍在运行的分区链路不受影响。
-5. 验证传感器是否能跟随活跃母管、分支和末端区同步点亮。
+    ## 5. 制图规范
+    1. 一张 DXF 只对应一个地块，不要把多个地块画在同一张导入图里。
+    2. 一个图层只放一种对象，不允许混放。
+    3. `HJ_PIPE` 只允许放管道中心线，只允许 `LINE` 或 `LWPOLYLINE`。
+    4. `HJ_SOURCE_STATION / HJ_VALVE / HJ_OUTLET / HJ_SENSOR` 建议使用标准块 `INSERT`，不要炸块。
+    5. DXF 中不要放图框、标题、图例、尺寸线、装饰符号。
+    6. DXF 不直接表达控制器、终端台账和资产归口，它只负责导入点位与网络关系。
+    7. 点位经纬度需要在工作台中通过“基准点投射”或手工回填补齐，发布前必须确认完整。
 
-## 6. 参数说明
-- `import.json` 内已内嵌 `graph_draft`，可作为 sidecar 一并上传。
-- 泵功率混合使用 `13.5kW / 37.5kW` 两档。
-- 泵扬程混合使用 `90m / 110m` 两档。
-- 节点高程为确定性随机值，整体高差控制在 40 米以内。
-- 出水口目标流量、最小压力、灌溉面积，阀门 `Kv`、默认开度，传感器类型与量程均已预填。
-- 当前系统的资产/设备主数据接口还不直接存额定功率/扬程/流量，这些参数会优先通过节点参数和子泵参数参与求解。
-"""
+    ## 5.1 管线方向提醒
+    - 涉及三通或分叉时，每个供水方向单独画成一条管线。
+    - 不要用一条 `LWPOLYLINE` 从左端穿过三通再到右端，否则导入后会在一侧形成反向管段。
+    - 系统会把管线首点到末点视为上游到下游方向，所以支线和田间支管要按供水方向绘制。
+
+    ## 6. 系统映射口径
+    - `HJ_SOURCE_STATION -> source_station`
+    - `HJ_VALVE -> valve`
+    - `HJ_PIPE -> pipe_main / pipe_branch`
+    - `HJ_OUTLET -> outlet`
+    - `HJ_SENSOR -> sensor`
+
+    补充说明：
+    - `source_kind=groundwater` 的点位显示为“机井”
+    - `source_kind=surface_water / river` 的点位显示为“泵站”
+    - `pump_units` 作为终端单元配置保存在 sidecar 中
+
+    ## 7. 验证重点
+    1. 验证导入后只生成 `source_station` 水源点位，而不是旧的“机井节点 + 泵站节点”双层模型。
+    2. 验证主干、联络、分区支干和田间支线的拓扑是否被完整识别。
+    3. 验证出水口上游校验是否要求“可追到水源站，且站下存在可用泵能力”。
+    4. 验证批量初始化后是否按“点位 -> 控制器 -> 终端单元 -> 资产归口”生成默认台账。
+    """
     (output_dir / SPEC_NAME).write_text(textwrap.dedent(content).strip() + "\n", encoding="utf-8")
 
 
-def write_manifest(output_dir: Path) -> None:
-    graph_draft = build_graph_draft()
+def write_manifest(output_dir: Path, graph_draft: dict) -> None:
+    counts = build_counts(graph_draft)
     manifest = {
         "type": "dxf_import_manifest",
         "template_name": "houji_complex_validation_template",
         "layer_mapping": LAYER_MAPPING,
         "layers": [name for name, _color, _label in LAYER_SPECS],
-        "counts": {
-            "wells": sum(1 for item in POINTS if item["kind"] == "well"),
-            "pumps": sum(1 for item in POINTS if item["kind"] == "pump"),
-            "valves": sum(1 for item in POINTS if item["kind"] == "valve"),
-            "outlets": sum(1 for item in POINTS if item["kind"] == "outlet"),
-            "sensors": sum(1 for item in POINTS if item["kind"] == "sensor"),
-            "pipes": len(PIPES),
-        },
+        "counts": counts,
         "point_symbol_mode": "insert_block",
-        "required_insert_layers": ["HJ_VALVE", "HJ_SENSOR", "HJ_OUTLET", "HJ_PUMP", "HJ_WELL"],
-        "outlet_zone_distribution": [3, 5, 4, 5, 4, 3],
+        "required_insert_layers": ["HJ_SOURCE_STATION", "HJ_VALVE", "HJ_OUTLET", "HJ_SENSOR"],
+        "outlet_zone_distribution": ZONE_OUTLET_DISTRIBUTION,
+        "topology_signature": {
+            "upper_trunk": True,
+            "middle_manifold": True,
+            "interties": 3,
+            "zones": len(ZONE_OUTLET_DISTRIBUTION),
+            "routing_style": "top_trunk_to_middle_manifold_to_zone_laterals",
+        },
         "parameter_profiles": {
-            "pump_power_kw_options": [13.5, 37.5],
-            "pump_head_m_options": [90, 110],
-            "elevation_range_m": [8.0, 48.0],
+            "pump_power_kw_options": sorted({profile["rated_power_kw"] for profile in PUMP_PROFILES}),
+            "pump_head_m_options": sorted({profile["rated_head_m"] for profile in PUMP_PROFILES}),
+            "source_kind_options": sorted({profile["source_kind"] for profile in PUMP_PROFILES}),
+            "elevation_range_m": [8.0, 42.0],
+            "source_model": "source_station_nodes_with_pump_units",
         },
         "graph_draft": graph_draft,
     }
     (output_dir / MANIFEST_NAME).write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
 
 
-def write_metadata(output_dir: Path) -> None:
-    graph_draft = build_graph_draft()
+def write_metadata(output_dir: Path, graph_draft: dict) -> None:
+    counts = build_counts(graph_draft)
     metadata = {
         "template_name": "houji_complex_validation_template",
         "format": "DXF",
         "version": "R2000",
         "units": "meter",
-        "counts": {
-            "wells": sum(1 for item in POINTS if item["kind"] == "well"),
-            "pumps": sum(1 for item in POINTS if item["kind"] == "pump"),
-            "valves": sum(1 for item in POINTS if item["kind"] == "valve"),
-            "outlets": sum(1 for item in POINTS if item["kind"] == "outlet"),
-            "sensors": sum(1 for item in POINTS if item["kind"] == "sensor"),
-            "pipes": len(PIPES),
-        },
+        "counts": counts,
         "topology_features": {
             "upper_trunk": True,
-            "lower_ring": True,
-            "interties": 2,
-            "zones": 6,
-            "outlet_zone_distribution": [3, 5, 4, 5, 4, 3],
+            "middle_manifold": True,
+            "interties": 3,
+            "zones": len(ZONE_OUTLET_DISTRIBUTION),
+            "outlet_zone_distribution": ZONE_OUTLET_DISTRIBUTION,
         },
         "parameter_profiles": {
-            "pump_power_kw_options": [13.5, 37.5],
-            "pump_head_m_options": [90, 110],
-            "elevation_range_m": [8.0, 48.0],
+            "pump_power_kw_options": sorted({profile["rated_power_kw"] for profile in PUMP_PROFILES}),
+            "pump_head_m_options": sorted({profile["rated_head_m"] for profile in PUMP_PROFILES}),
+            "source_kind_options": sorted({profile["source_kind"] for profile in PUMP_PROFILES}),
+            "elevation_range_m": [8.0, 42.0],
             "sidecar_graph_nodes": len(graph_draft["nodes"]),
             "sidecar_graph_pipes": len(graph_draft["pipes"]),
+            "source_model": "source_station_nodes_with_pump_units",
         },
         "layer_mapping": LAYER_MAPPING,
         "symbol_mode": {
-            "well": "insert_block",
-            "pump": "insert_block",
+            "source_station": "insert_block",
             "valve": "insert_block",
             "outlet": "insert_block",
             "sensor": "insert_block",
@@ -577,12 +668,16 @@ def copy_to_public(output_dir: Path) -> None:
 
 def main() -> None:
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
+    graph_draft = build_graph_draft()
+    validate_graph_draft(graph_draft)
+
     doc = create_doc()
     doc.saveas(OUTPUT_DIR / DXF_NAME)
-    write_spec(OUTPUT_DIR)
-    write_manifest(OUTPUT_DIR)
-    write_metadata(OUTPUT_DIR)
+    write_spec(OUTPUT_DIR, graph_draft)
+    write_manifest(OUTPUT_DIR, graph_draft)
+    write_metadata(OUTPUT_DIR, graph_draft)
     copy_to_public(OUTPUT_DIR)
+
     print(f"[cad-template] generated complex validation DXF in {OUTPUT_DIR}")
     print(f"[cad-template] copied public downloads to {PUBLIC_DIR}")
 

@@ -403,7 +403,186 @@
 
 - Phase 1 仅供数据预留和内部调试，不提供微信/飞书正式接入。
 
-## 13. 错误码建议
+## 13. 投资者关系接口（V1 草案）
+
+适用说明：
+
+- 面向 `/i` 投资者移动端的 Phase 1 形态。
+- 本组接口只服务“项目披露 + 意向登记 + 资料留痕 + 消息跟进”。
+- 本组接口不形成认购单、不生成持仓、不做分红结算。
+
+### 13.1 联系人与意向提交
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | `/investor/contacts` | 创建或补全投资者联系人 |
+| POST | `/investor/project-interests` | 提交项目意向 |
+| GET | `/investor/project-interests` | 查询我的意向列表 |
+| GET | `/investor/project-interests/{id}` | 查询意向详情 |
+| POST | `/investor/project-interests/{id}/events` | 追加跟进事件 |
+
+`POST /investor/contacts` 请求示例：
+
+```json
+{
+  "source_channel": "investor_mobile",
+  "source_session_key": "ihub_local_01J9XYZ",
+  "contact_name": "张三",
+  "contact_phone": "13800138000",
+  "organization_name": "星河资本",
+  "position_title": "投资经理",
+  "city_name": "上海",
+  "wechat_no": "zhangsan-ir",
+  "investor_type": "institution",
+  "risk_preference": "balanced"
+}
+```
+
+`POST /investor/project-interests` 请求示例：
+
+```json
+{
+  "contact_id": "ic_xxx",
+  "project_id": "proj_xxx",
+  "project_block_id": "block_xxx",
+  "source_channel": "investor_mobile",
+  "intent_type": "callback",
+  "intent_amount": 5000000,
+  "currency_code": "CNY",
+  "planned_decision_window": "within_30_days",
+  "intent_note": "重点关注节水改造项目的回款稳定性",
+  "intake_snapshot": {
+    "favorite_count": 3,
+    "material_keys": ["monthly_report_2026_03", "risk_note_v1"]
+  }
+}
+```
+
+`GET /investor/project-interests/{id}` 返回重点字段：
+
+```json
+{
+  "id": "ipi_xxx",
+  "lifecycle_status": "materials_shared",
+  "latest_reason_code": "MATERIALS_SHARED",
+  "project": {
+    "id": "proj_xxx",
+    "project_name": "高标准农田节水改造一期"
+  },
+  "contact": {
+    "id": "ic_xxx",
+    "contact_name": "张三",
+    "contact_phone_masked": "138****8000"
+  },
+  "latest_progress": {
+    "advisor_owner": "advisor_007",
+    "last_followup_at": "2026-04-14T09:30:00Z",
+    "next_followup_at": "2026-04-18T08:00:00Z"
+  },
+  "event_timeline": [
+    {
+      "action_code": "submit_interest",
+      "to_status": "submitted",
+      "operator_type": "investor",
+      "occurred_at": "2026-04-14T08:10:00Z"
+    },
+    {
+      "action_code": "share_materials",
+      "to_status": "materials_shared",
+      "operator_type": "advisor",
+      "occurred_at": "2026-04-14T09:30:00Z"
+    }
+  ]
+}
+```
+
+规则：
+
+- `contact_phone` 可用于同租户下联系人合并，但不能直接当作正式登录凭据。
+- `converted_offline` 只表示进入线下正式流程，不表示创建任何交易或认购订单。
+- `/investor/project-interests/{id}/events` 允许顾问或系统追加跟进事件，但不允许前端直接跳过主状态守卫。
+
+### 13.2 项目资料与消息
+
+| 方法 | 路径 | 用途 |
+| --- | --- | --- |
+| POST | `/investor/material-access` | 记录资料浏览/下载/分享 |
+| GET | `/investor/messages` | 投资者消息列表 |
+| POST | `/investor/messages/{id}/read` | 标记消息已读 |
+
+`POST /investor/material-access` 请求示例：
+
+```json
+{
+  "contact_id": "ic_xxx",
+  "interest_id": "ipi_xxx",
+  "project_id": "proj_xxx",
+  "project_block_id": "block_xxx",
+  "material_type": "monthly_report",
+  "material_key": "monthly_report_2026_03",
+  "access_action": "download",
+  "access_source": "investor_mobile",
+  "access_snapshot": {
+    "source_page": "project_detail",
+    "device_type": "mobile_web"
+  }
+}
+```
+
+`GET /investor/messages` 返回建议：
+
+```json
+{
+  "items": [
+    {
+      "id": "msg_xxx",
+      "message_type": "project_update",
+      "title": "项目月报已更新",
+      "body": "高标准农田节水改造一期已补充 2026-03 月报。",
+      "is_read": false,
+      "project_id": "proj_xxx",
+      "created_at": "2026-04-14T10:00:00Z"
+    }
+  ],
+  "total": 1,
+  "page": 1,
+  "page_size": 20
+}
+```
+
+规则：
+
+- 资料访问接口只记录访问事实，不托管文件本体。
+- 消息中心是投资者关系消息，不复用灌溉运行告警。
+- 前端可以本地缓存已读态，但最终已读口径以后端为准。
+
+### 13.3 项目池只读补充字段
+
+项目池仍使用现有 `project` / `project_block` 为主数据，投资者端读取时建议补充：
+
+```json
+{
+  "project_id": "proj_xxx",
+  "project_name": "高标准农田节水改造一期",
+  "status": "active",
+  "owner": "后稷农业",
+  "operator": "后稷运营中心",
+  "contact_phone": "400-000-0000",
+  "investor_summary": {
+    "risk_level": "medium",
+    "ticket_size_label": "100万起",
+    "disclosure_ready": true,
+    "latest_report_at": "2026-04-10T00:00:00Z"
+  }
+}
+```
+
+规则：
+
+- `investor_summary` 属于展示聚合视图，可由后端组装，但底层真值仍来自 `project`、`project_block` 与新增投资者关系表。
+- 不允许在项目池接口中返回“保本”“固定收益”之类合规风险字段。
+
+## 14. 错误码建议
 
 | 错误码 | 场景 | 含义 |
 | --- | --- | --- |
@@ -420,18 +599,24 @@
 | SAFETY_PROTECTION_TRIGGERED | 运行 | 触发安全保护 |
 | ORDER_REVIEW_REQUIRED | 订单 | 订单需人工复核 |
 | WORK_ORDER_STATE_INVALID | 工单 | 工单状态流转非法 |
+| INVESTOR_CONTACT_INCOMPLETE | 投资者关系 | 联系信息不完整 |
+| INVESTOR_INTEREST_STATE_INVALID | 投资者关系 | 意向状态流转非法 |
+| INVESTOR_PROJECT_NOT_OPEN | 投资者关系 | 项目当前不接受新增意向 |
+| INVESTOR_MATERIAL_ACCESS_INVALID | 投资者关系 | 资料访问记录缺少必要上下文 |
 | AI_HIGH_RISK_INTENT | AI | 高风险意图，不允许直接执行 |
 
-## 14. 前后端边界
+## 15. 前后端边界
 
 前端负责：
 
 - 表单录入、状态展示、动作触发、阻断原因展示。
 - 根据 `available_actions` 决定按钮显隐和禁用态。
 - 根据 `risk_level` 决定是否突出显示帮助或人工入口。
+- 投资者端只展示后端返回的意向状态、顾问消息与资料披露，不自行计算成交、持仓或收益。
 
 后端负责：
 
 - 规则合并、运行决策、计费阈值判定、并发控制、安全保护链。
 - 状态推进、命令投递、计价快照冻结、告警建单。
 - AI 工具调用白名单、风险分级、转人工与审计。
+- 投资者联系资料、意向流转、资料访问留痕、消息已读口径与后续转线下审计。

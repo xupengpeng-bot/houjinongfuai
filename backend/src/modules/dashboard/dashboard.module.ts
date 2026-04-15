@@ -60,7 +60,7 @@ class DashboardController {
         (
           select count(distinct well_id)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_wells,
         (select count(*)::int from device) as total_devices,
         (
@@ -135,7 +135,7 @@ class DashboardController {
         (
           select count(distinct well_id)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_wells,
         (select count(*)::int from device) as total_devices,
         (

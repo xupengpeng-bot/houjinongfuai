@@ -57,10 +57,10 @@
 - 统一设备命令注册表
 - `ACK / NACK / retry_pending / dead_letter` 语义
 - `tcp-json-v1` socket 通道
-- `HTTP bridge connect / heartbeat / disconnect`
+- `HTTP bridge connect / heartbeat / disconnect` sidecar 通道
 - 设备离线自动告警、自动建单、自动派单、自动收口
-- 心跳恢复或重连恢复时自动重新激活 `retry_pending`
-- `bridge/heartbeat` 默认可直接回带待执行命令
+- 平台侧在连接恢复时可重新激活 `retry_pending`
+- `bridge/heartbeat` 在 sidecar bridge 模式下仅在显式 `dispatch_pending_commands=true` 时可回带平台待派发命令，但这不代表 MCU 设备侧存在命令队列
 - Python 串口 bridge 脚本：
   - `backend/scripts/device_gateway_serial_bridge.py`
   - 支持 `COM3` 或 `loop://`
@@ -83,7 +83,7 @@
 - 连接后端 `HTTP bridge`
 - 周期性发 `heartbeat`
 - 把串口收到的 JSON 行转成后端 runtime event
-- 把后端 `pending_commands` 回写到串口
+- 可把后端 `pending_commands` 回写到串口 sidecar，但该能力仅限 bridge 模式且应显式开启
 - 支持 `--once` 便于联调和快速自检
 
 ### 3.2 串口 bridge 已进入合同与回归

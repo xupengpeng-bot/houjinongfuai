@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "t": "SC",
+  "i": "860000000000001",
+  "m": "cfg-0201",
+  "s": 201,
+  "ts": "2026-04-07T13:10:00Z",
+  "c": "CFG-20260407-0201",
+  "p": {
+    "cv": 7,
+    "ff": "FW_H2_UNIFIED",
+    "fm": [
+      "pvc",
+      "prs",
+      "flw",
+      "pwm"
+    ],
+    "ri": {
+      "relay_output": 2,
+      "motor_driver": 2,
+      "digital_input": 2,
+      "analog_input": 2,
+      "pulse_input": 1,
+      "rs485_modbus": 1,
+      "power_monitor": 1
+    },
+    "cb": [
+      {
+        "channel_code": "pressure_1",
+        "module_code": "pressure_acquisition",
+        "io_kind": "analog_input",
+        "enabled": true
+      },
+      {
+        "channel_code": "flow_1",
+        "module_code": "flow_acquisition",
+        "io_kind": "pulse_input",
+        "enabled": true
+      },
+      {
+        "channel_code": "pump_1",
+        "module_code": "pump_vfd_control",
+        "io_kind": "relay_output",
+        "enabled": true
+      }
+    ],
+    "rr": {
+      "heartbeat_interval_sec": 60,
+      "snapshot_idle_interval_sec": 180,
+      "snapshot_running_interval_sec": 15,
+      "runtime_tick_interval_sec": 15,
+      "control_timeout_sec": 30,
+      "thresholds": {
+        "pressure_low_mpa": 0.2,
+        "pressure_high_mpa": 0.8
+      }
+    }
+  }
+}

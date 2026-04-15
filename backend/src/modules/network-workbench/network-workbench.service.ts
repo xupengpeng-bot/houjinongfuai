@@ -67,6 +67,7 @@ type RelationGenerationResult = {
 
 type WorkbenchModelVersionSummary = {
   id: string;
+  block_id: string | null;
   version_no: number;
   is_published: boolean;
   published_at: string | null;
@@ -92,6 +93,10 @@ type WorkbenchGraphDraftNode = {
     rated_flow_m3h?: number | string | null;
     rated_head_m?: number | string | null;
     rated_power_kw?: number | string | null;
+    source_node_code?: string | null;
+    intake_node_code?: string | null;
+    well_node_code?: string | null;
+    device_role?: string | null;
     asset_ids?: string[];
     device_ids?: string[];
   }>;
@@ -133,6 +138,13 @@ type DraftBoundDeviceRow = {
   type_code: string | null;
   type_name: string | null;
   lifecycle_state: string | null;
+};
+
+type DraftReachableValveEndpoint = {
+  node: WorkbenchGraphDraftNode;
+  node_code: string;
+  endpoint_type: 'valve' | 'outlet';
+  valve_device: DraftBoundDeviceRow;
 };
 
 type GraphMaterializationResult = {
@@ -375,6 +387,7 @@ export class NetworkWorkbenchService {
   private normalizeModelVersionRow(row: any): WorkbenchModelVersionSummary {
     return {
       id: row.id,
+      block_id: row.block_id ?? null,
       version_no: Number(row.version_no ?? 0),
       is_published: Boolean(row.is_published),
       published_at: this.toIso(row.published_at),
@@ -390,22 +403,96 @@ export class NetworkWorkbenchService {
     return Boolean(version && version.node_count > 0 && version.pipe_count > 0);
   }
 
+  private isCurrentDraft(
+    version: Pick<WorkbenchModelVersionSummary, 'is_published' | 'published_at'> | null | undefined,
+  ) {
+    return Boolean(version && !version.is_published && !version.published_at);
+  }
+
+  private getVersionBlockId(
+    version: Pick<WorkbenchModelVersionSummary, 'block_id' | 'source_meta'> | null | undefined,
+  ): string | null {
+    const relationalBlockId =
+      typeof version?.block_id === 'string'
+        ? version.block_id.trim()
+        : '';
+    if (relationalBlockId) return relationalBlockId;
+    const sourceMeta = this.asObject(version?.source_meta);
+    const blockId = typeof sourceMeta.block_id === 'string' ? sourceMeta.block_id.trim() : '';
+    return blockId || null;
+  }
+
+  private filterVersionsForBlock(
+    versions: WorkbenchModelVersionSummary[],
+    preferredBlockId?: string | null,
+    fallbackToAnyBlock = true,
+  ) {
+    const blockId = preferredBlockId?.trim();
+    if (!blockId) return versions;
+    const scopedVersions = versions.filter((item) => this.getVersionBlockId(item) === blockId);
+    if (scopedVersions.length > 0) return scopedVersions;
+    return fallbackToAnyBlock ? versions : [];
+  }
+
+  private isVersionInBlockScope(
+    version: Pick<WorkbenchModelVersionSummary, 'block_id' | 'source_meta'> | null | undefined,
+    preferredBlockId?: string | null,
+  ) {
+    const blockId = preferredBlockId?.trim();
+    if (!blockId) return true;
+    return this.getVersionBlockId(version) === blockId;
+  }
+
   private pickVersionForConfig(
     versions: WorkbenchModelVersionSummary[],
-    preferredVersionId?: string | null
+    preferredVersionId?: string | null,
+    options?: { preferredBlockId?: string | null; fallbackToAnyBlock?: boolean },
   ): WorkbenchModelVersionSummary | null {
     if (preferredVersionId) {
-      const explicit = versions.find((item) => item.id === preferredVersionId);
+      const explicit = versions.find(
+        (item) => item.id === preferredVersionId && this.isVersionInBlockScope(item, options?.preferredBlockId),
+      );
       if (explicit) return explicit;
     }
 
+    const candidates = this.filterVersionsForBlock(
+      versions,
+      options?.preferredBlockId,
+      options?.fallbackToAnyBlock ?? true,
+    );
     return (
-      versions.find((item) => item.is_published && this.hasUsableGraph(item)) ??
-      versions.find((item) => this.hasUsableGraph(item)) ??
-      versions.find((item) => item.is_published) ??
-      versions.find((item) => !item.is_published) ??
-      versions[0] ??
+      candidates.find((item) => item.is_published && this.hasUsableGraph(item)) ??
+      candidates.find((item) => this.hasUsableGraph(item)) ??
+      candidates.find((item) => item.is_published) ??
+      candidates.find((item) => this.isCurrentDraft(item)) ??
+      candidates.find((item) => !item.is_published) ??
+      candidates[0] ??
       null
+    );
+  }
+
+  private pickDraftVersionForSave(
+    versions: WorkbenchModelVersionSummary[],
+    preferredBlockId?: string | null,
+  ): WorkbenchModelVersionSummary | null {
+    const candidates = this.filterVersionsForBlock(versions, preferredBlockId, false);
+    return candidates.find((item) => this.isCurrentDraft(item)) ?? null;
+  }
+
+  private pickExplicitDraftVersionForSave(
+    versions: WorkbenchModelVersionSummary[],
+    preferredVersionId?: string | null,
+    preferredBlockId?: string | null,
+  ): WorkbenchModelVersionSummary | null {
+    const versionId = preferredVersionId?.trim();
+    if (!versionId) return null;
+    return (
+      versions.find(
+        (item) =>
+          item.id === versionId &&
+          this.isCurrentDraft(item) &&
+          this.isVersionInBlockScope(item, preferredBlockId),
+      ) ?? null
     );
   }
 
@@ -462,6 +549,50 @@ export class NetworkWorkbenchService {
     return entries.length > 0 ? Object.fromEntries(entries) : null;
   }
 
+  private isSourceStationNodeType(nodeType: unknown) {
+    const normalized = this.sanitizeCode(nodeType, '').toLowerCase();
+    return normalized === 'source_station' || normalized === 'well' || normalized === 'pump';
+  }
+
+  private normalizeSourceKind(value: unknown, fallback: string = 'groundwater') {
+    const normalized = String(value ?? '').trim().toLowerCase();
+    switch (normalized) {
+      case 'groundwater':
+      case 'well':
+      case 'jijing':
+        return 'groundwater';
+      case 'river':
+        return 'river';
+      case 'pond':
+        return 'pond';
+      case 'canal':
+        return 'canal';
+      case 'reservoir':
+        return 'reservoir';
+      case 'surface':
+      case 'surface_water':
+      case 'surfacewater':
+      case 'pump_station':
+      case 'pumpstation':
+        return 'surface_water';
+      default:
+        return fallback;
+    }
+  }
+
+  private normalizeDraftNodeType(nodeType: unknown) {
+    return this.isSourceStationNodeType(nodeType)
+      ? 'source_station'
+      : this.sanitizeCode(nodeType, 'junction').toLowerCase();
+  }
+
+  private withNormalizedSourceStationParams(nodeType: unknown, nodeParams: Record<string, string | number | null> | null) {
+    if (!this.isSourceStationNodeType(nodeType)) return nodeParams;
+    const next = nodeParams ? { ...nodeParams } : {};
+    next.source_kind = this.normalizeSourceKind(next.source_kind, this.normalizeSourceKind(nodeType, 'groundwater'));
+    return next;
+  }
+
   private normalizePumpUnits(value: unknown, nodeCode: string) {
     if (!Array.isArray(value)) return [];
     return value.map((item, index) => {
@@ -473,6 +604,19 @@ export class NetworkWorkbenchService {
         rated_flow_m3h: this.toNullableNumber(unit.rated_flow_m3h),
         rated_head_m: this.toNullableNumber(unit.rated_head_m),
         rated_power_kw: this.toNullableNumber(unit.rated_power_kw),
+        source_node_code:
+          typeof unit.source_node_code === 'string' && unit.source_node_code.trim()
+            ? this.sanitizeCode(unit.source_node_code, '')
+            : null,
+        intake_node_code:
+          typeof unit.intake_node_code === 'string' && unit.intake_node_code.trim()
+            ? this.sanitizeCode(unit.intake_node_code, '')
+            : null,
+        well_node_code:
+          typeof unit.well_node_code === 'string' && unit.well_node_code.trim()
+            ? this.sanitizeCode(unit.well_node_code, '')
+            : null,
+        device_role: typeof unit.device_role === 'string' ? unit.device_role.trim() || null : null,
         asset_ids: this.normalizeStringArray(unit.asset_ids),
         device_ids: this.normalizeStringArray(unit.device_ids)
       };
@@ -498,6 +642,23 @@ export class NetworkWorkbenchService {
     const text = typeof value === 'string' ? value.trim() : '';
     const normalized = text.replace(/[^A-Za-z0-9_-]+/g, '_').replace(/^_+|_+$/g, '');
     return normalized || fallback;
+  }
+
+  private ensureUniqueCode(baseCode: string, usedCodes: Set<string>, fallbackPrefix: string, index: number) {
+    const normalized = baseCode.trim() || `${fallbackPrefix}_${index + 1}`;
+    if (!usedCodes.has(normalized)) {
+      usedCodes.add(normalized);
+      return normalized;
+    }
+
+    let suffix = 2;
+    let candidate = `${normalized}_${suffix}`;
+    while (usedCodes.has(candidate)) {
+      suffix += 1;
+      candidate = `${normalized}_${suffix}`;
+    }
+    usedCodes.add(candidate);
+    return candidate;
   }
 
   private buildGraphSourceMeta(
@@ -1729,7 +1890,8 @@ export class NetworkWorkbenchService {
       throw new BadRequestException('source_file is required');
     }
 
-    const context = await this.resolveContext(input.project_id, input.block_id);
+    const scope = this.requireExplicitWorkbenchScope(input.project_id, input.block_id);
+    const context = await this.resolveContext(scope.projectId, scope.blockId);
     const uploadRoot = this.getWorkbenchUploadRoot();
     const dateFolder = new Date().toISOString().slice(0, 10);
     const scopedDir = path.join(
@@ -1773,7 +1935,8 @@ export class NetworkWorkbenchService {
   }
 
   async previewSource(input: WorkbenchSourcePreviewInput): Promise<WorkbenchSourcePreviewResult> {
-    const context = await this.resolveContext(input.project_id, input.block_id);
+    const scope = this.requireExplicitWorkbenchScope(input.project_id, input.block_id);
+    const context = await this.resolveContext(scope.projectId, scope.blockId);
     const result = await this.resolveSourceImport(input, context);
     const { graph_draft: _graphDraft, normalized_layer_mapping: _layerMapping, sidecar_resolved_path: _sidecar, ...preview } = result;
     return preview;
@@ -1950,7 +2113,11 @@ export class NetworkWorkbenchService {
     };
   }
 
-  private async loadPublishedGraphDraftSnapshot(projectId: string, client?: any): Promise<WorkbenchGraphDraft | null> {
+  private async loadPublishedGraphDraftSnapshot(
+    projectId: string,
+    blockId?: string | null,
+    client?: any
+  ): Promise<WorkbenchGraphDraft | null> {
     const result = await this.db.query<{ graph_draft_snapshot: unknown }>(
       `
       select source_meta_json->'graph_draft_snapshot' as graph_draft_snapshot
@@ -1958,10 +2125,14 @@ export class NetworkWorkbenchService {
       join network_model nm on nm.id = nmv.network_model_id
       where nm.project_id = $1::uuid
         and nmv.is_published = true
+        and (
+          $2::uuid is null
+          or coalesce(nmv.block_id, nullif(nmv.source_meta_json->>'block_id', '')::uuid) = $2::uuid
+        )
       order by nmv.published_at desc nulls last, nmv.created_at desc
       limit 1
       `,
-      [projectId],
+      [projectId, blockId ?? null],
       client
     );
     const rawDraft = this.asObject(result.rows[0]?.graph_draft_snapshot);
@@ -2009,9 +2180,114 @@ export class NetworkWorkbenchService {
 
     let score = 0;
     if (roleSignals[expectedRole]) score += 100;
-    if (expectedRole === 'well' && device.asset_type === 'well') score += 40;
-    if (expectedRole === 'pump' && (device.asset_type === 'pump' || device.asset_type === 'pump_station')) score += 40;
+    if (expectedRole === 'well' && (device.asset_type === 'well' || device.asset_type === 'pump_station')) score += 40;
+    if (expectedRole === 'pump' && device.asset_type === 'pump') score += 40;
     if (expectedRole === 'valve' && (device.asset_type === 'valve' || device.asset_type === 'valve_group')) score += 40;
+    if (sensorSignals) score -= 60;
+
+    for (const otherRole of ['well', 'pump', 'valve'] as const) {
+      if (otherRole !== expectedRole && roleSignals[otherRole]) {
+        score -= 30;
+      }
+    }
+
+    return score;
+  }
+
+  private scoreDraftDeviceRoleWithContext(
+    device: DraftBoundDeviceRow,
+    expectedRole: 'well' | 'pump' | 'valve',
+    nodeType?: string | null
+  ) {
+    const haystack = [
+      device.type_code,
+      device.type_name,
+      device.device_name,
+      device.device_code,
+      device.asset_type,
+      device.asset_name
+    ]
+      .filter((item): item is string => typeof item === 'string' && item.trim().length > 0)
+      .join(' ')
+      .toLowerCase();
+
+    const hasAny = (candidates: string[]) => candidates.some((candidate) => haystack.includes(candidate));
+    const normalizedNodeType = this.normalizeDraftNodeType(nodeType);
+    const roleSignals = {
+      well: hasAny([
+        'well',
+        'source_station',
+        'pump_station',
+        'water_source',
+        '\u4e95',
+        '\u673a\u4e95',
+        '\u6cf5\u7ad9',
+        '\u6c34\u6e90',
+        '\u6e90\u7ad9'
+      ]),
+      pump: hasAny([
+        'pump',
+        'pump_unit',
+        '\u6cf5',
+        '\u6cf5\u63a7',
+        '\u6c34\u6cf5',
+        '\u673a\u6cf5'
+      ]),
+      valve: hasAny([
+        'valve',
+        'svctrl',
+        'solenoid',
+        'outlet',
+        '\u9600',
+        '\u7535\u78c1\u9600',
+        '\u9600\u95e8',
+        '\u9600\u63a7'
+      ])
+    };
+    const sensorSignals = hasAny([
+      'meter',
+      'collector',
+      'sensor',
+      'flow',
+      'pressure',
+      'wmtr',
+      '\u91c7\u96c6',
+      '\u4f20\u611f',
+      '\u6d41\u91cf',
+      '\u538b\u529b',
+      '\u6c34\u8868'
+    ]);
+    const controllerSignals = hasAny([
+      'controller',
+      'ctrl',
+      'control',
+      '\u4e3b\u63a7',
+      '\u63a7\u5236',
+      '\u63a7\u5236\u5668',
+      '\u6cf5\u63a7',
+      '\u9600\u63a7'
+    ]);
+
+    let score = 0;
+    if (roleSignals[expectedRole]) score += 100;
+    if (controllerSignals && !sensorSignals) score += 20;
+    if (expectedRole === 'well' && (device.asset_type === 'well' || device.asset_type === 'pump_station')) score += 40;
+    if (expectedRole === 'pump' && device.asset_type === 'pump') score += 40;
+    if (expectedRole === 'valve' && (device.asset_type === 'valve' || device.asset_type === 'valve_group')) score += 40;
+    if (
+      expectedRole === 'well' &&
+      normalizedNodeType === 'source_station' &&
+      hasAny(['source_station', 'pump_station', '\u6cf5\u7ad9', '\u6e90\u7ad9', '\u4e3b\u63a7'])
+    ) {
+      score += 60;
+    }
+    if (
+      expectedRole === 'valve' &&
+      (normalizedNodeType === 'outlet' || normalizedNodeType === 'valve') &&
+      hasAny(['valve', 'svctrl', 'solenoid', '\u9600', '\u7535\u78c1\u9600', '\u9600\u95e8', '\u9600\u63a7'])
+    ) {
+      score += 60;
+    }
     if (sensorSignals) score -= 60;
 
     for (const otherRole of ['well', 'pump', 'valve'] as const) {
@@ -2033,11 +2309,90 @@ export class NetworkWorkbenchService {
       .filter((device): device is DraftBoundDeviceRow => Boolean(device))
       .map((device) => ({
         device,
-        score: this.scoreDraftDeviceRole(device, expectedRole)
+        score: this.scoreDraftDeviceRoleWithContext(device, expectedRole, node.node_type)
       }))
       .sort((a, b) => b.score - a.score);
 
     return candidates[0]?.score > 0 ? candidates[0].device : null;
+  }
+
+  private pickDraftSourceStationDevice(
+    node: WorkbenchGraphDraftNode,
+    devicesById: Map<string, DraftBoundDeviceRow>
+  ) {
+    return this.pickDraftNodeDeviceByRole(node, devicesById, 'well');
+  }
+
+  private pickDraftPumpUnitDevices(
+    node: WorkbenchGraphDraftNode,
+    devicesById: Map<string, DraftBoundDeviceRow>
+  ) {
+    const pumpDevices = new Map<string, { device: DraftBoundDeviceRow; unitCode: string | null; ratedPowerKw: number | null }>();
+
+    for (const unit of node.pump_units ?? []) {
+      if (unit?.enabled === false) continue;
+      const unitCode = typeof unit?.unit_code === 'string' ? unit.unit_code : null;
+      const ratedPowerKw = this.toNullableNumber(unit?.rated_power_kw);
+      for (const deviceId of this.normalizeStringArray(unit?.device_ids)) {
+        const device = devicesById.get(deviceId);
+        if (!device) continue;
+        pumpDevices.set(device.id, {
+          device,
+          unitCode,
+          ratedPowerKw
+        });
+      }
+    }
+
+    if (pumpDevices.size === 0) {
+      const fallback = this.pickDraftNodeDeviceByRole(node, devicesById, 'pump');
+      if (fallback) {
+        pumpDevices.set(fallback.id, {
+          device: fallback,
+          unitCode: null,
+          ratedPowerKw: this.toNullableNumber(node.node_params?.rated_power_kw)
+        });
+      }
+    }
+
+    return [...pumpDevices.values()];
+  }
+
+  private collectReachableValveEndpoints(
+    sourceNodeCode: string,
+    nodesByCode: Map<string, WorkbenchGraphDraftNode>,
+    adjacency: Map<string, Set<string>>,
+    devicesById: Map<string, DraftBoundDeviceRow>
+  ) {
+    const valves = new Map<string, DraftReachableValveEndpoint>();
+    const queue = [sourceNodeCode];
+    const visited = new Set<string>(queue);
+
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      for (const next of [...(adjacency.get(current) ?? [])]) {
+        if (visited.has(next)) continue;
+        visited.add(next);
+        queue.push(next);
+        const node = nodesByCode.get(next);
+        if (!node) continue;
+        const normalizedNodeType = this.normalizeDraftNodeType(node.node_type);
+        const endpointType =
+          normalizedNodeType === 'valve' ? 'valve' : normalizedNodeType === 'outlet' ? 'outlet' : null;
+        if (!endpointType) continue;
+        const valveDevice = this.pickDraftNodeDeviceByRole(node, devicesById, 'valve');
+        if (!valveDevice) continue;
+        const nodeCode = this.sanitizeCode(node.node_code, next);
+        valves.set(valveDevice.id, {
+          node,
+          node_code: nodeCode,
+          endpoint_type: endpointType,
+          valve_device: valveDevice
+        });
+      }
+    }
+
+    return [...valves.values()];
   }
 
   private buildScopedDraftCode(prefix: 'WELL' | 'PUMP' | 'VALVE', nodeCode: string, deviceId: string) {
@@ -2045,22 +2400,31 @@ export class NetworkWorkbenchService {
   }
 
   private async ensureScopedPumpValveRelationsFromDraft(projectId: string, blockId: string, client: any): Promise<void> {
-    const draft = await this.loadPublishedGraphDraftSnapshot(projectId, client);
+    const draft = await this.loadPublishedGraphDraftSnapshot(projectId, blockId, client);
     if (!draft?.nodes?.length) return;
 
     const nodesByCode = new Map(
       (draft.nodes ?? []).map((node) => [this.sanitizeCode(node.node_code, ''), node] as const).filter(([code]) => Boolean(code))
     );
-    const outgoing = new Map<string, Set<string>>();
+    const adjacency = new Map<string, Set<string>>();
     for (const pipe of this.dedupeDraftPipesByEdge(draft.pipes)) {
       const from = pipe.from_node_code ? this.sanitizeCode(pipe.from_node_code, '') : '';
       const to = pipe.to_node_code ? this.sanitizeCode(pipe.to_node_code, '') : '';
       if (!from || !to) continue;
-      if (!outgoing.has(from)) outgoing.set(from, new Set());
-      outgoing.get(from)!.add(to);
+      if (!adjacency.has(from)) adjacency.set(from, new Set());
+      if (!adjacency.has(to)) adjacency.set(to, new Set());
+      adjacency.get(from)!.add(to);
+      adjacency.get(to)!.add(from);
     }
 
-    const deviceIds = [...new Set((draft.nodes ?? []).flatMap((node) => this.normalizeStringArray(node.device_ids)))];
+    const deviceIds = [
+      ...new Set(
+        (draft.nodes ?? []).flatMap((node) => [
+          ...this.normalizeStringArray(node.device_ids),
+          ...(node.pump_units ?? []).flatMap((unit) => this.normalizeStringArray(unit?.device_ids))
+        ])
+      )
+    ];
     if (deviceIds.length === 0) return;
 
     const deviceRows = await this.db.query<DraftBoundDeviceRow>(
@@ -2118,117 +2482,119 @@ export class NetworkWorkbenchService {
         .map((row) => [row.device_id, row] as const)
     );
 
-    for (const [wellNodeCode, wellNode] of nodesByCode.entries()) {
-      if (this.sanitizeCode(wellNode.node_type, '').toLowerCase() !== 'well') continue;
+    for (const [sourceStationNodeCode, sourceStationNode] of nodesByCode.entries()) {
+      if (this.normalizeDraftNodeType(sourceStationNode.node_type) !== 'source_station') continue;
 
-      for (const pumpNodeCode of [...(outgoing.get(wellNodeCode) ?? [])]) {
-        const pumpNode = nodesByCode.get(pumpNodeCode);
-        if (!pumpNode || this.sanitizeCode(pumpNode.node_type, '').toLowerCase() !== 'pump') continue;
+      const sourceStationDevice = this.pickDraftSourceStationDevice(sourceStationNode, devicesById);
+      const pumpDevices = this.pickDraftPumpUnitDevices(sourceStationNode, devicesById);
+      const valveEndpoints = this.collectReachableValveEndpoints(sourceStationNodeCode, nodesByCode, adjacency, devicesById);
+      if (!sourceStationDevice || pumpDevices.length === 0 || valveEndpoints.length === 0) continue;
 
-        for (const valveNodeCode of [...(outgoing.get(pumpNodeCode) ?? [])]) {
-          const valveNode = nodesByCode.get(valveNodeCode);
-          if (!valveNode || this.sanitizeCode(valveNode.node_type, '').toLowerCase() !== 'valve') continue;
+      const sourceKind = this.normalizeSourceKind(sourceStationNode.node_params?.source_kind, 'groundwater');
+      let wellId = wellByDeviceId.get(sourceStationDevice.id)?.id ?? null;
+      const sourceStationProfile = JSON.stringify({
+        source: 'network_workbench_graph_bridge',
+        displayName:
+          sourceStationNode.node_name ?? sourceStationDevice.asset_name ?? sourceStationDevice.device_name ?? sourceStationNodeCode,
+        nodeCode: sourceStationNodeCode,
+        sourceKind
+      });
 
-          const wellDevice = this.pickDraftNodeDeviceByRole(wellNode, devicesById, 'well');
-          const pumpDevice = this.pickDraftNodeDeviceByRole(pumpNode, devicesById, 'pump');
-          const valveDevice = this.pickDraftNodeDeviceByRole(valveNode, devicesById, 'valve');
-          if (!wellDevice || !pumpDevice || !valveDevice) continue;
+      if (wellId) {
+        await this.db.query(
+          `
+          update well
+          set block_id = $3::uuid,
+              rated_flow = coalesce($4, rated_flow),
+              rated_pressure = coalesce($5, rated_pressure),
+              water_source_type = coalesce($6, water_source_type),
+              safety_profile_json = coalesce(safety_profile_json, '{}'::jsonb) || $7::jsonb,
+              updated_at = now()
+          where tenant_id = $1 and id = $2::uuid
+          `,
+          [
+            TENANT_ID,
+            wellId,
+            blockId,
+            this.toNullableNumber(sourceStationNode.node_params?.design_flow_m3h ?? sourceStationNode.node_params?.rated_flow_m3h),
+            this.toNullableNumber(sourceStationNode.node_params?.pump_head_m ?? sourceStationNode.node_params?.rated_head_m),
+            sourceKind,
+            sourceStationProfile
+          ],
+          client
+        );
+      } else {
+        const insertedWell = await this.db.query<{ id: string }>(
+          `
+          insert into well (
+            tenant_id,
+            device_id,
+            block_id,
+            well_code,
+            water_source_type,
+            rated_flow,
+            rated_pressure,
+            safety_profile_json
+          )
+          values ($1, $2::uuid, $3::uuid, $4, $5, $6, $7, $8::jsonb)
+          returning id
+          `,
+          [
+            TENANT_ID,
+            sourceStationDevice.id,
+            blockId,
+            this.buildScopedDraftCode('WELL', sourceStationNodeCode, sourceStationDevice.id),
+            sourceKind,
+            this.toNullableNumber(sourceStationNode.node_params?.design_flow_m3h ?? sourceStationNode.node_params?.rated_flow_m3h),
+            this.toNullableNumber(sourceStationNode.node_params?.pump_head_m ?? sourceStationNode.node_params?.rated_head_m),
+            sourceStationProfile
+          ],
+          client
+        );
+        wellId = insertedWell.rows[0].id;
+        wellByDeviceId.set(sourceStationDevice.id, { id: wellId, device_id: sourceStationDevice.id, block_id: blockId });
+      }
 
-          let wellId = wellByDeviceId.get(wellDevice.id)?.id ?? null;
-          if (wellId) {
-            await this.db.query(
-              `
-              update well
-              set block_id = $3::uuid,
-                  rated_flow = coalesce($4, rated_flow),
-                  rated_pressure = coalesce($5, rated_pressure),
-                  safety_profile_json = coalesce(safety_profile_json, '{}'::jsonb) || $6::jsonb,
-                  updated_at = now()
-              where tenant_id = $1 and id = $2::uuid
-              `,
-              [
-                TENANT_ID,
-                wellId,
-                blockId,
-                this.toNullableNumber(wellNode.node_params?.design_flow_m3h),
-                this.toNullableNumber(wellNode.node_params?.pump_head_m),
-                JSON.stringify({
-                  source: 'network_workbench_graph_bridge',
-                  displayName: wellNode.node_name ?? wellDevice.asset_name ?? wellDevice.device_name ?? wellNodeCode,
-                  nodeCode: wellNodeCode
-                })
-              ],
-              client
-            );
-          } else {
-            const insertedWell = await this.db.query<{ id: string }>(
-              `
-              insert into well (
-                tenant_id,
-                device_id,
-                block_id,
-                well_code,
-                water_source_type,
-                rated_flow,
-                rated_pressure,
-                safety_profile_json
-              )
-              values ($1, $2::uuid, $3::uuid, $4, 'groundwater', $5, $6, $7::jsonb)
-              returning id
-              `,
-              [
-                TENANT_ID,
-                wellDevice.id,
-                blockId,
-                this.buildScopedDraftCode('WELL', wellNodeCode, wellDevice.id),
-                this.toNullableNumber(wellNode.node_params?.design_flow_m3h),
-                this.toNullableNumber(wellNode.node_params?.pump_head_m),
-                JSON.stringify({
-                  source: 'network_workbench_graph_bridge',
-                  displayName: wellNode.node_name ?? wellDevice.asset_name ?? wellDevice.device_name ?? wellNodeCode,
-                  nodeCode: wellNodeCode
-                })
-              ],
-              client
-            );
-            wellId = insertedWell.rows[0].id;
-            wellByDeviceId.set(wellDevice.id, { id: wellId, device_id: wellDevice.id, block_id: blockId });
-          }
+      if (!wellId) continue;
 
-          if (!wellId) continue;
+      for (const { device: pumpDevice, unitCode, ratedPowerKw } of pumpDevices) {
+        let pumpId = pumpByDeviceId.get(pumpDevice.id)?.id ?? null;
+        if (pumpId) {
+          await this.db.query(
+            `
+            update pump
+            set well_id = $3::uuid,
+                rated_power_kw = coalesce($4, rated_power_kw),
+                updated_at = now()
+            where tenant_id = $1 and id = $2::uuid
+            `,
+            [TENANT_ID, pumpId, wellId, ratedPowerKw],
+            client
+          );
+        } else {
+          const insertedPump = await this.db.query<{ id: string }>(
+            `
+            insert into pump (tenant_id, device_id, well_id, pump_code, rated_power_kw)
+            values ($1, $2::uuid, $3::uuid, $4, $5)
+            returning id
+            `,
+            [
+              TENANT_ID,
+              pumpDevice.id,
+              wellId,
+              this.sanitizeCode(unitCode ?? this.buildScopedDraftCode('PUMP', sourceStationNodeCode, pumpDevice.id), this.buildScopedDraftCode('PUMP', sourceStationNodeCode, pumpDevice.id)),
+              ratedPowerKw
+            ],
+            client
+          );
+          pumpId = insertedPump.rows[0].id;
+          pumpByDeviceId.set(pumpDevice.id, { id: pumpId, device_id: pumpDevice.id, well_id: wellId });
+        }
 
-          let pumpId = pumpByDeviceId.get(pumpDevice.id)?.id ?? null;
-          if (pumpId) {
-            await this.db.query(
-              `
-              update pump
-              set well_id = $3::uuid,
-                  rated_power_kw = coalesce($4, rated_power_kw),
-                  updated_at = now()
-              where tenant_id = $1 and id = $2::uuid
-              `,
-              [TENANT_ID, pumpId, wellId, this.toNullableNumber(pumpNode.node_params?.rated_power_kw)],
-              client
-            );
-          } else {
-            const insertedPump = await this.db.query<{ id: string }>(
-              `
-              insert into pump (tenant_id, device_id, well_id, pump_code, rated_power_kw)
-              values ($1, $2::uuid, $3::uuid, $4, $5)
-              returning id
-              `,
-              [
-                TENANT_ID,
-                pumpDevice.id,
-                wellId,
-                this.buildScopedDraftCode('PUMP', pumpNodeCode, pumpDevice.id),
-                this.toNullableNumber(pumpNode.node_params?.rated_power_kw)
-              ],
-              client
-            );
-            pumpId = insertedPump.rows[0].id;
-            pumpByDeviceId.set(pumpDevice.id, { id: pumpId, device_id: pumpDevice.id, well_id: wellId });
-          }
+        for (const valveEndpoint of valveEndpoints) {
+          const valveNode = valveEndpoint.node;
+          const valveNodeCode = valveEndpoint.node_code;
+          const valveDevice = valveEndpoint.valve_device;
 
           let valveId = valveByDeviceId.get(valveDevice.id)?.id ?? null;
           if (valveId) {
@@ -2293,9 +2659,10 @@ export class NetworkWorkbenchService {
             valveDelaySeconds: 0,
             pumpDelaySeconds: 0,
             source: 'network_workbench_graph_bridge',
-            well_node_code: wellNodeCode,
-            pump_node_code: pumpNodeCode,
-            valve_node_code: valveNodeCode
+            source_station_node_code: sourceStationNodeCode,
+            pump_unit_code: unitCode,
+            valve_node_code: valveNodeCode,
+            valve_endpoint_type: valveEndpoint.endpoint_type
           };
 
           if (existingRelation.rows[0]) {
@@ -2336,16 +2703,17 @@ export class NetworkWorkbenchService {
   }
 
   private normalizeGraphDraft(draft: WorkbenchGraphDraft | undefined | null) {
+    const usedPipeCodes = new Set<string>();
     const nodes = Array.isArray(draft?.nodes)
       ? draft!.nodes
           .map((item, index) => ({
             node_code: this.sanitizeCode(item.node_code, `node_${index + 1}`),
             node_name: typeof item.node_name === 'string' ? item.node_name.trim() || null : null,
-            node_type: this.sanitizeCode(item.node_type, 'junction').toLowerCase(),
+            node_type: this.normalizeDraftNodeType(item.node_type),
             asset_id: item.asset_id ?? null,
             asset_ids: this.normalizeStringArray(item.asset_ids),
             device_ids: this.normalizeStringArray(item.device_ids),
-            node_params: this.normalizeNodeParams(item.node_params),
+            node_params: this.withNormalizedSourceStationParams(item.node_type, this.normalizeNodeParams(item.node_params)),
             pump_units: this.normalizePumpUnits(item.pump_units, this.sanitizeCode(item.node_code, `node_${index + 1}`)),
             cad_x: this.toNullableNumber(item.cad_x),
             cad_y: this.toNullableNumber(item.cad_y),
@@ -2361,7 +2729,12 @@ export class NetworkWorkbenchService {
     const pipes = Array.isArray(draft?.pipes)
       ? draft!.pipes
           .map((item, index) => ({
-            pipe_code: this.sanitizeCode(item.pipe_code, `pipe_${index + 1}`),
+            pipe_code: this.ensureUniqueCode(
+              this.sanitizeCode(item.pipe_code, `pipe_${index + 1}`),
+              usedPipeCodes,
+              'pipe',
+              index
+            ),
             pipe_type: this.sanitizeCode(item.pipe_type, 'main').toLowerCase(),
             from_node_code: this.sanitizeCode(item.from_node_code, ''),
             to_node_code: this.sanitizeCode(item.to_node_code, ''),
@@ -2476,6 +2849,39 @@ export class NetworkWorkbenchService {
     };
   }
 
+  private async assertVersionHasPublishableSourceStations(versionId: string, client: any) {
+    const invalidSourceStations = await this.db.query<{ node_code: string }>(
+      `
+      select node_code
+      from network_node
+      where version_id = $1::uuid
+        and node_type = 'source_station'
+        and (
+          latitude is null
+          or longitude is null
+          or abs(latitude::float8) > 90
+          or abs(longitude::float8) > 180
+          or (latitude::float8 = 0 and longitude::float8 = 0)
+        )
+      order by node_code
+      limit 5
+      `,
+      [versionId],
+      client
+    );
+
+    if (invalidSourceStations.rows.length === 0) {
+      return;
+    }
+
+    const labels = invalidSourceStations.rows
+      .map((item) => String(item.node_code ?? '').trim())
+      .filter(Boolean);
+    throw new BadRequestException(
+      `以下点位尚未补齐经纬度：${labels.join('、')}。请先设置基准点经纬度，或在 graph_draft 中回填点位坐标后再发布。`,
+    );
+  }
+
   getDeviceContract() {
     const transportPolicy = this.gateway.getTransportPolicy();
     const socketInfo = this.tcpServer.getSocketInfo();
@@ -2493,74 +2899,55 @@ export class NetworkWorkbenchService {
         'DEVICE_REGISTERED',
         'DEVICE_HEARTBEAT',
         'DEVICE_STATE_SNAPSHOT',
+        'DEVICE_QUERY_RESULT',
         'DEVICE_RUNTIME_TICK',
         'DEVICE_RUNTIME_STOPPED',
         'DEVICE_ALARM_RAISED',
         'DEVICE_COMMAND_ACKED',
         'DEVICE_COMMAND_NACKED'
       ],
-      suggested_command_codes: [
-        'START_SESSION',
-        'START_PUMP',
-        'OPEN_VALVE',
-        'SYNC_STATE',
-        'CLOSE_VALVE',
-        'STOP_PUMP',
-        'STOP_SESSION'
-      ],
+      suggested_command_codes: ['QUERY', 'EXECUTE_ACTION', 'SYNC_CONFIG'],
       envelope_fields: [
-        'protocolVersion',
+        'protocol',
         'imei',
-        'msgId',
-        'seqNo',
-        'msgType',
-        'deviceTs',
-        'serverRxTs',
-        'sessionRef',
-        'runState',
-        'powerState',
-        'alarmCodes',
-        'cumulativeRuntimeSec',
-        'cumulativeEnergyWh',
-        'cumulativeFlow',
+        'msg_id',
+        'seq',
+        'type',
+        'ts',
+        'correlation_id',
+        'session_ref',
         'payload',
         'integrity'
       ],
       command_contracts: [
         {
-          command_code: 'START_SESSION',
-          target_role: 'well',
-          expected_ack: 'DEVICE_COMMAND_ACKED',
-          followup_events: ['DEVICE_STATE_SNAPSHOT', 'DEVICE_RUNTIME_TICK']
-        },
-        {
-          command_code: 'START_PUMP',
-          target_role: 'pump',
-          expected_ack: 'DEVICE_COMMAND_ACKED',
-          followup_events: ['DEVICE_STATE_SNAPSHOT', 'DEVICE_RUNTIME_TICK']
-        },
-        {
-          command_code: 'OPEN_VALVE',
-          target_role: 'valve',
-          expected_ack: 'DEVICE_COMMAND_ACKED',
+          command_code: 'QUERY',
+          wire_type: 'QUERY',
+          expected_ack: 'DEVICE_QUERY_RESULT',
           followup_events: ['DEVICE_STATE_SNAPSHOT']
         },
         {
-          command_code: 'STOP_SESSION',
-          target_role: 'well',
+          command_code: 'EXECUTE_ACTION',
+          wire_type: 'EXECUTE_ACTION',
           expected_ack: 'DEVICE_COMMAND_ACKED',
-          followup_events: ['DEVICE_RUNTIME_STOPPED']
+          followup_events: ['DEVICE_STATE_SNAPSHOT', 'DEVICE_RUNTIME_TICK', 'DEVICE_RUNTIME_STOPPED']
+        },
+        {
+          command_code: 'SYNC_CONFIG',
+          wire_type: 'SYNC_CONFIG',
+          expected_ack: 'DEVICE_COMMAND_ACKED',
+          followup_events: ['DEVICE_STATE_SNAPSHOT']
         }
       ],
       command_reference_rule: {
         accepted_correlation_keys: [
-          'command_dispatch.id',
-          'payload.command_id',
-          'payload.start_token',
-          'sessionRef + command_code'
+          'correlation_id',
+          'device_command.command_id',
+          'command_dispatch <- command_id mapping',
+          'session_ref + logical command_code'
         ],
-        preferred_embedded_key: 'payload.command_id',
-        backend_fallbacks: ['payload.start_token', 'sessionRef + command_code']
+        preferred_embedded_key: 'correlation_id',
+        backend_fallbacks: ['payload.command_code', 'session_ref + logical command_code']
       },
       session_reference_rule: {
         pattern: 'SIM-<timestamp>',
@@ -2586,11 +2973,13 @@ export class NetworkWorkbenchService {
         python_module: 'pyserial',
         line_protocol: 'newline_delimited_json',
         default_heartbeat_interval_seconds: 15,
+        default_idle_state_snapshot_interval_seconds: 120,
+        default_running_state_snapshot_interval_seconds: 10,
         supported_port_examples: ['COM3', 'loop://'],
         lifecycle: ['connect', 'heartbeat', 'disconnect']
       },
       bridge_capabilities: {
-        heartbeat_dispatch_pending_default: true,
+        heartbeat_dispatch_pending_default: false,
         heartbeat_can_embed_pending_commands: true,
         heartbeat_default_pending_limit: 20
       },
@@ -2605,58 +2994,106 @@ export class NetworkWorkbenchService {
         sweep_connections: '/api/v1/ops/device-gateway/sweep-connections',
         manual_requeue: '/api/v1/ops/device-gateway/commands/:id/requeue'
       },
-      transport_message_types: ['PULL_PENDING_COMMANDS', 'HEARTBEAT', 'STATE_SNAPSHOT', 'RUNTIME_TICK', 'COMMAND_ACK'],
+      transport_message_types: [
+        'REGISTER',
+        'HEARTBEAT',
+        'STATE_SNAPSHOT',
+        'EVENT_REPORT',
+        'QUERY_RESULT',
+        'COMMAND_ACK',
+        'COMMAND_NACK'
+      ],
       outbound_command_fields: [
-        'command_token',
-        'command_code',
-        'imei',
-        'session_ref',
-        'start_token',
-        'request_payload'
+        'v',
+        't',
+        'i',
+        'm',
+        's',
+        'c',
+        'r',
+        'p'
       ],
       sample_payloads: {
-        heartbeat: { msgType: 'HEARTBEAT', payload: { signal_dbm: -67, battery_percent: 86 } },
+        register: {
+          v: 1,
+          t: 'RG',
+          p: {
+            controller_code: 'scan_irrigation_controller_trial_v1',
+            hs: 'SCAN-IRR-CTRL-4G',
+            hr: 'A01',
+            ff: 'SCAN-IRRIGATION-CONTROL',
+            fv: '0.1.0',
+            cv: 1,
+            fm: ['pdc', 'svl', 'cdr', 'pay'],
+            cap_ver: 3,
+            cap_hash: 'sha256:8d1a97f4c4d0f2b8',
+            config_bitmap: '0x0000001f',
+            actions_bitmap: '0x0000003f',
+            queries_bitmap: '0x00000007',
+            limits: {
+              max_inflight_control: 1,
+              event_queue_depth: 8,
+              ota_block_bytes: 512,
+            },
+          }
+        },
+        heartbeat: {
+          v: 1,
+          t: 'HB',
+          p: {
+            csq: 19,
+            bs: 86,
+            rd: true,
+            cv: 1,
+            cap_hash: 'sha256:8d1a97f4c4d0f2b8',
+          }
+        },
         state_snapshot: {
-          msgType: 'STATE_SNAPSHOT',
-          payload: { pump_state: 'idle', valve_state: 'closed', pressure_kpa: 126.4, flow_m3h: 0 }
+          v: 1,
+          t: 'SS',
+          p: {
+            wf: 'RI',
+            ch: [
+              { mc: 'prs', cc: 'pressure_1', v: 0.1264 },
+              { mc: 'flw', cc: 'flow_1', v: 0 }
+            ]
+          }
         },
         alarm: {
-          msgType: 'ALARM',
-          payload: { alarm_code: 'PRESSURE_HIGH', severity: 'high', message: 'pressure exceeded threshold' }
+          v: 1,
+          t: 'ER',
+          p: { event_code: 'pressure_high', severity: 'high', message: 'pressure exceeded threshold' }
         },
         command_acked: {
-          msgType: 'COMMAND_ACK',
-          payload: {
+          v: 1,
+          t: 'AK',
+          c: 'device-command-token-or-dispatch-id',
+          p: {
             command_code: 'START_SESSION',
-            command_id: 'device-command-token-or-dispatch-id',
-            start_token: 'optional-start-token',
-            result: 'acked'
+            ac: 'st',
+            result: 'accepted'
           }
         },
         command_nacked: {
-          msgType: 'COMMAND_ACK',
-          payload: {
+          v: 1,
+          t: 'NK',
+          c: 'device-command-token-or-dispatch-id',
+          p: {
             command_code: 'START_PUMP',
-            command_id: 'device-command-token-or-dispatch-id',
-            result: 'nack',
+            ac: 'sv',
+            result: 'rejected',
             retryable: true,
             reason_code: 'pump_not_ready'
           }
         },
         pending_command: {
-          msgType: 'PULL_PENDING_COMMANDS',
-          payload: {
-            imei: '860000000000001',
-            limit: 5,
-            expected_response_fields: ['command_token', 'command_code', 'request_payload']
-          }
-        },
-        tcp_socket_pull: {
-          msgType: 'PULL_PENDING_COMMANDS',
-          payload: {
-            limit: 5,
-            mark_sent: true,
-            include_sent: false
+          v: 1,
+          t: 'EX',
+          c: 'device-command-token-or-dispatch-id',
+          p: {
+            sc: 'wf',
+            ac: 'st',
+            sid: 'S-6601D010'
           }
         }
       }
@@ -2680,23 +3117,23 @@ export class NetworkWorkbenchService {
       {
         heartbeat: {
           eventType: 'DEVICE_HEARTBEAT',
-          msgType: 'HEARTBEAT',
+          msgType: 'HB',
           payload: { signal_dbm: -65, battery_percent: 88 }
         },
         state_snapshot: {
           eventType: 'DEVICE_STATE_SNAPSHOT',
-          msgType: 'STATE_SNAPSHOT',
+          msgType: 'SS',
           payload: { pump_state: 'running', valve_state: 'open', pressure_kpa: 131.8, flow_m3h: 22.4 }
         },
         alarm: {
           eventType: 'DEVICE_ALARM_RAISED',
-          msgType: 'ALARM',
+          msgType: 'ER',
           alarmCodes: ['PRESSURE_HIGH'],
           payload: { alarm_code: 'PRESSURE_HIGH', severity: 'high', message: 'pressure exceeded threshold' }
         },
         command_acked: {
           eventType: 'DEVICE_COMMAND_ACKED',
-          msgType: 'COMMAND_ACK',
+          msgType: 'AK',
           payload: {
             command_code: input?.action ?? 'START_SESSION',
             command_id: input?.command_id ?? 'preview-command',
@@ -2706,28 +3143,22 @@ export class NetworkWorkbenchService {
       }[scenario] ??
       {
         eventType: 'DEVICE_HEARTBEAT',
-        msgType: 'HEARTBEAT',
+        msgType: 'HB',
         payload: { signal_dbm: -65, battery_percent: 88 }
       };
 
     return {
       mode: 'preview_only',
       envelope: {
-        protocolVersion: 'tcp-json-v1',
-        imei,
-        msgId,
-        seqNo,
-        msgType: picked.msgType,
-        deviceTs: now,
-        serverRxTs: now,
-        sessionRef: input?.session_ref ?? null,
-        runState: picked.msgType === 'STATE_SNAPSHOT' ? 'running' : null,
-        powerState: picked.msgType === 'STATE_SNAPSHOT' ? 'on' : null,
-        alarmCodes: 'alarmCodes' in picked ? picked.alarmCodes : [],
-        cumulativeRuntimeSec: 3600,
-        cumulativeEnergyWh: 12800,
-        cumulativeFlow: 52.3,
-        payload: picked.payload,
+        v: 1,
+        i: imei,
+        m: msgId,
+        s: seqNo,
+        t: picked.msgType,
+        ts: now,
+        c: input?.command_id ?? null,
+        r: input?.session_ref ?? null,
+        p: picked.payload,
         integrity: { checksum: 'preview-only' }
       },
       runtime_event: {
@@ -2813,6 +3244,23 @@ export class NetworkWorkbenchService {
     };
   }
 
+  private requireExplicitWorkbenchScope(projectId?: string, blockId?: string) {
+    const normalizedProjectId = projectId?.trim();
+    if (!normalizedProjectId) {
+      throw new BadRequestException('project_id is required');
+    }
+
+    const normalizedBlockId = blockId?.trim();
+    if (!normalizedBlockId) {
+      throw new BadRequestException('block_id is required');
+    }
+
+    return {
+      projectId: normalizedProjectId,
+      blockId: normalizedBlockId
+    };
+  }
+
   private async resolveOrCreateNetworkModel(projectId: string) {
     const existing = await this.db.query(
       `
@@ -2894,6 +3342,7 @@ export class NetworkWorkbenchService {
       `
       select
         nmv.id,
+        nmv.block_id::text as block_id,
         nmv.version_no,
         nmv.is_published,
         nmv.published_at,
@@ -2945,7 +3394,7 @@ export class NetworkWorkbenchService {
     return result.rows;
   }
 
-  async loadNetworkModel(projectId: string | null) {
+  async loadNetworkModel(projectId: string | null, blockId?: string | null) {
     if (!projectId) return null;
     const result = await this.db.query(
       `
@@ -2962,9 +3411,10 @@ export class NetworkWorkbenchService {
     if (!model) return null;
 
     const versions = await this.loadModelVersions(model.id);
-    const publishedVersion = versions.find((item) => item.is_published) ?? null;
+    const scopedPublishedVersion =
+      this.filterVersionsForBlock(versions, blockId, false).find((item) => item.is_published) ?? null;
 
-    if (!publishedVersion) {
+    if (!scopedPublishedVersion) {
       return {
         id: model.id,
         model_name: model.model_name,
@@ -2976,14 +3426,16 @@ export class NetworkWorkbenchService {
       };
     }
 
-    const graph = this.hasUsableGraph(publishedVersion) ? await this.loadGraph(publishedVersion.id) : { nodes: [], pipes: [] };
+    const graph = this.hasUsableGraph(scopedPublishedVersion)
+      ? await this.loadGraph(scopedPublishedVersion.id)
+      : { nodes: [], pipes: [] };
 
     return {
       id: model.id,
       model_name: model.model_name,
       source_type: model.source_type,
       status: model.status,
-      published_version: publishedVersion,
+      published_version: scopedPublishedVersion,
       preview_nodes: graph.nodes.slice(0, 80),
       preview_pipes: graph.pipes.slice(0, 80)
     };
@@ -3026,7 +3478,6 @@ export class NetworkWorkbenchService {
       where pvr.tenant_id = $1
       ${where}
       order by pvr.created_at asc
-      limit 50
       `,
       params,
       client
@@ -3090,7 +3541,6 @@ export class NetworkWorkbenchService {
           or tr.target_id in (select device_id from scoped_devices)
         )
       order by tr.updated_at desc, tr.created_at desc
-      limit 50
       `,
       params
     );
@@ -3109,7 +3559,6 @@ export class NetworkWorkbenchService {
     const nextActions: string[] = [];
     if (!input.selected_project_id) blockers.push('缺少项目上下文');
     if (!input.selected_block_id) blockers.push('缺少区块上下文');
-    if (input.metering_points.length === 0) blockers.push('当前范围内还没有计量点');
     if (!input.network_model) blockers.push('当前项目还没有网络模型');
     if (input.network_model && !input.network_model.published_version) blockers.push('当前网络模型还没有已发布版本');
     if (
@@ -3120,10 +3569,10 @@ export class NetworkWorkbenchService {
     }
     if (input.pump_valve_relations.length === 0) blockers.push('当前范围内还没有井泵阀关系');
     if (input.pump_valve_relations.length > 0 && input.device_relations.length === 0) {
-      nextActions.push('保存配置后自动生成设备联动关系');
+      nextActions.push('请先在台账中维护设备联动关系');
     }
     if (!input.network_model?.published_version) nextActions.push('先登记图源并发布网络模型版本，再进入调度');
-    if (input.metering_points.length === 0) nextActions.push('补齐区块默认计量点，避免调度与结算断层');
+    if (input.metering_points.length === 0) nextActions.push('建议补齐区块默认计量点，便于后续计费、核算与报表');
     if (nextActions.length === 0) nextActions.push('配置已具备，可进入调度工作台');
     return { ready: blockers.length === 0, blockers, next_actions: nextActions };
   }
@@ -3142,7 +3591,6 @@ export class NetworkWorkbenchService {
 
     if (!input.selected_project_id) blockers.push('missing project context');
     if (!input.selected_block_id) blockers.push('missing block context');
-    if (input.metering_points.length === 0) blockers.push('current scope has no metering point');
     if (!input.network_model) blockers.push('project has no network model');
     if (input.network_model && !publishedVersion) blockers.push('network model has no published version');
     if (publishedVersion && !publishedVersion.source_file_ref) {
@@ -3159,7 +3607,9 @@ export class NetworkWorkbenchService {
     if (publishedVersion && !this.hasUsableGraph(publishedVersion)) {
       nextActions.push('import or persist graph nodes/pipes onto the published version');
     }
-    if (input.metering_points.length === 0) nextActions.push('create default metering point for the selected block');
+    if (input.metering_points.length === 0) {
+      nextActions.push('create a default metering point later for billing, accounting, and reporting');
+    }
     if (nextActions.length === 0) nextActions.push('configuration is ready for backend scheduling and backend simulation');
     return { ready: blockers.length === 0, blockers, next_actions: nextActions };
   }
@@ -3168,11 +3618,15 @@ export class NetworkWorkbenchService {
     const context = await this.resolveContext(projectId, blockId);
     const [meteringPoints, networkModel, pumpValveRelations, deviceRelations] = await Promise.all([
       this.loadMeteringPoints(context.selected_project_id, context.selected_block_id),
-      this.loadNetworkModel(context.selected_project_id),
+      this.loadNetworkModel(context.selected_project_id, context.selected_block_id),
       this.loadPumpValveRelations(context.selected_project_id, context.selected_block_id),
       this.loadDeviceRelations(context.selected_project_id, context.selected_block_id)
     ]);
-    const modelVersions = await this.loadModelVersions(networkModel?.id ?? null);
+    const modelVersions = this.filterVersionsForBlock(
+      await this.loadModelVersions(networkModel?.id ?? null),
+      context.selected_block_id,
+      false,
+    );
     const autoGeneratedTotal = deviceRelations.filter((item: any) => item.generated_source === 'network_workbench').length;
     return {
       ...context,
@@ -3195,13 +3649,13 @@ export class NetworkWorkbenchService {
 
   async getGraph(projectId?: string, blockId?: string, versionId?: string) {
     const context = await this.resolveContext(projectId, blockId);
-    const networkModel = await this.loadNetworkModel(context.selected_project_id);
+    const networkModel = await this.loadNetworkModel(context.selected_project_id, context.selected_block_id);
     const modelVersions = await this.loadModelVersions(networkModel?.id ?? null);
     const selectedVersion =
-      modelVersions.find((item: any) => item.id === versionId) ??
-      modelVersions.find((item: any) => item.is_published) ??
-      modelVersions[0] ??
-      null;
+      this.pickVersionForConfig(modelVersions, versionId, {
+        preferredBlockId: context.selected_block_id,
+        fallbackToAnyBlock: false,
+      }) ?? null;
 
     if (!selectedVersion) {
       return {
@@ -3269,7 +3723,7 @@ export class NetworkWorkbenchService {
           join well w on w.id = rs.well_id
           left join project_block pb on pb.id = w.block_id
           where w.tenant_id = $1
-            and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+            and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
           ${scopeSql}
         ), 0) as running_session_count,
         coalesce((
@@ -3278,7 +3732,7 @@ export class NetworkWorkbenchService {
           join well w on w.id = rs.well_id
           left join project_block pb on pb.id = w.block_id
           where w.tenant_id = $1
-            and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+            and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
           ${scopeSql}
         ), 0) as running_well_count,
         coalesce((
@@ -3339,7 +3793,7 @@ export class NetworkWorkbenchService {
         next_actions:
           blockers.length === 0
             ? ['可以直接进入后端调度与设备模拟联调']
-            : ['先回配置工作台补齐已发布模型、图源登记和自动生成的联动关系']
+            : ['先回配置工作台补齐已发布模型、图源登记，并在台账中维护联动关系']
       }
     };
   }
@@ -3483,7 +3937,7 @@ export class NetworkWorkbenchService {
             gateway_manual_requeue: '/api/v1/ops/device-gateway/commands/:id/requeue'
           },
         expectations: [
-          '配置完成后由后端持久化网络模型和自动生成设备联动关系',
+          '配置完成后由后端持久化网络模型，设备与联动关系需由台账流程维护',
           '前端只消费后端交接包，不承担设备模拟器或求解器职责',
           '嵌入式联调以 backend handoff package、solver preview 和 simulator script 为准',
           '真实硬件 ACK 接入后，应继续复用同一 protocol_name、command_contracts 和 session_reference_rule'
@@ -3504,11 +3958,6 @@ export class NetworkWorkbenchService {
     const updatedRelationIds: string[] = [];
 
     await this.db.withTransaction(async (client) => {
-      if (pumpValveRelations.length === 0 && projectId && blockId) {
-        await this.ensureScopedPumpValveRelationsFromDraft(projectId, blockId, client);
-        pumpValveRelations = await this.loadPumpValveRelations(projectId, blockId, client);
-      }
-
       for (const relation of pumpValveRelations as any[]) {
         for (const item of [
           {
@@ -3611,13 +4060,16 @@ export class NetworkWorkbenchService {
   }
 
   async saveConfig(input: WorkbenchSaveConfigInput) {
-    const context = await this.resolveContext(input.project_id, input.block_id);
+    const scope = this.requireExplicitWorkbenchScope(input.project_id, input.block_id);
+    const context = await this.resolveContext(scope.projectId, scope.blockId);
     if (!context.selected_project_id) {
       throw new BadRequestException('project_id is required');
     }
+    if (!context.selected_block_id) {
+      throw new BadRequestException('block_id is required');
+    }
 
     const networkModel = await this.resolveOrCreateNetworkModel(context.selected_project_id);
-    const relationStrategy = input.relation_strategy?.trim() || 'pump_chain_auto';
     const sourceAnalysis = await this.resolveSourceImport(input, context);
     const textEncodingPolicy = {
       charset: 'utf-8',
@@ -3638,22 +4090,26 @@ export class NetworkWorkbenchService {
         this.normalizeModelVersionRow(item)
       );
       const explicitVersionId = input.version_id?.trim() || null;
-      const selectedVersion = explicitVersionId
-        ? this.pickVersionForConfig(existingVersions, explicitVersionId)
-        : publish
-          ? null
-          : existingVersions.find((item) => !item.is_published) ?? null;
+      const selectedVersion =
+        this.pickExplicitDraftVersionForSave(existingVersions, explicitVersionId, context.selected_block_id) ??
+        this.pickDraftVersionForSave(existingVersions, context.selected_block_id);
       let versionId = selectedVersion?.id ?? null;
 
       if (versionId) {
         await this.db.query(
           `
           update network_model_version
-          set source_file_ref = $2,
-              source_meta_json = $3::jsonb
+          set block_id = $2::uuid,
+              source_file_ref = $3,
+              source_meta_json = $4::jsonb
           where id = $1::uuid
           `,
-          [versionId, input.source_file_ref?.trim() || null, JSON.stringify(effectiveSourceMeta)],
+          [
+            versionId,
+            context.selected_block_id,
+            input.source_file_ref?.trim() || null,
+            JSON.stringify(effectiveSourceMeta),
+          ],
           client
         );
       } else {
@@ -3670,16 +4126,18 @@ export class NetworkWorkbenchService {
           `
           insert into network_model_version (
             network_model_id,
+            block_id,
             version_no,
             is_published,
             source_file_ref,
             source_meta_json
           )
-          values ($1::uuid, $2, false, $3, $4::jsonb)
+          values ($1::uuid, $2::uuid, $3, false, $4, $5::jsonb)
           returning id
           `,
           [
             networkModel.id,
+            context.selected_block_id,
             Number(nextVersion.rows[0]?.next_version_no ?? 1),
             input.source_file_ref?.trim() || null,
             JSON.stringify(effectiveSourceMeta)
@@ -3741,14 +4199,17 @@ export class NetworkWorkbenchService {
       );
 
       if (publish) {
+        await this.assertVersionHasPublishableSourceStations(versionId, client);
         await this.db.query(
           `
           update network_model_version
-          set is_published = false,
-              published_at = null
-          where network_model_id = $1::uuid and id <> $2::uuid
+          set is_published = false
+          where network_model_id = $1::uuid
+            and id <> $2::uuid
+            and block_id is not distinct from $3::uuid
+            and is_published = true
           `,
-          [networkModel.id, versionId],
+          [networkModel.id, versionId, context.selected_block_id],
           client
         );
         await this.db.query(
@@ -3775,14 +4236,7 @@ export class NetworkWorkbenchService {
       };
     });
 
-    const relationGeneration =
-      input.auto_generate_relations === false
-        ? null
-        : await this.generateRelations(
-            context.selected_project_id ?? undefined,
-            context.selected_block_id ?? undefined,
-            relationStrategy
-          );
+    const relationGeneration = null;
 
     const config = await this.getConfig(context.selected_project_id ?? undefined, context.selected_block_id ?? undefined);
 

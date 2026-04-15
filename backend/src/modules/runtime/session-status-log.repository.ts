@@ -51,6 +51,7 @@ export class SessionStatusLogRepository {
 
   async findBySessionId(sessionId: string, client?: PoolClient) {
     const result = await this.db.query<{
+      createdAt: string;
       fromStatus: string | null;
       toStatus: string;
       actionCode: string;
@@ -62,6 +63,7 @@ export class SessionStatusLogRepository {
     }>(
       `
       select
+        created_at as "createdAt",
         from_status as "fromStatus",
         to_status as "toStatus",
         action_code as "actionCode",

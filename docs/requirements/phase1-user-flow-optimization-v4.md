@@ -63,8 +63,8 @@
 
 当前已顺的点：
 
-- `connect / heartbeat / disconnect` 是正式合同
-- `heartbeat` 可直接回带待执行命令
+- `connect / heartbeat / disconnect` 是 sidecar bridge 正式合同
+- `heartbeat` 在 bridge 模式下仅在显式 `dispatch_pending_commands=true` 时可回带平台待派发命令，但这不表示 MCU 设备侧允许缓存或排队控制命令
 - 串口接入已有现成 bridge 脚本，不用再自己临时写一层
 
 ## 3. 本轮新增体验价值

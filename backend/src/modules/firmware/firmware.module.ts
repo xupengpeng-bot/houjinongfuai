@@ -3,6 +3,7 @@ import {
   Body,
   Controller,
   Get,
+  Head,
   HttpException,
   HttpStatus,
   Injectable,
@@ -11,8 +12,8 @@ import {
   Param,
   Post,
   Query,
+  Req,
   Res,
-  StreamableFile,
   UploadedFiles,
   UseInterceptors,
 } from '@nestjs/common';
@@ -21,7 +22,7 @@ import { FileFieldsInterceptor } from '@nestjs/platform-express';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
-import type { Response } from 'express';
+import type { Request, Response } from 'express';
 import type { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
@@ -45,10 +46,16 @@ type UpgradeJobStatus = 'pending' | 'running' | 'partial_success' | 'success' | 
 type UpgradeItemStatus =
   | 'pending'
   | 'command_sent'
+  | 'accepted'
   | 'command_acked'
   | 'downloading'
+  | 'downloaded'
+  | 'verified'
+  | 'staged'
+  | 'scheduled'
   | 'installing'
   | 'rebooting'
+  | 'boot_confirmed'
   | 'rollback_running'
   | 'rollback_succeeded'
   | 'rollback_failed'
@@ -63,6 +70,14 @@ type UploadFile = {
   originalname?: string;
   mimetype?: string;
   size?: number;
+};
+
+type ArtifactDownloadFile = {
+  file_name: string;
+  content_type: string;
+  absolute_path: string;
+  file_size_bytes: number;
+  etag: string;
 };
 
 function asString(value: unknown) {
@@ -128,6 +143,71 @@ function sanitizePercent(value: unknown) {
   return Math.max(0, Math.min(100, Number(parsed.toFixed(2))));
 }
 
+function normalizeStrongEtag(value: unknown) {
+  const normalized = asString(value);
+  if (!normalized || /^w\//i.test(normalized)) {
+    return '';
+  }
+  const bare = normalized.replace(/^"+|"+$/g, '');
+  return bare ? `"${bare}"` : '';
+}
+
+function stripEtagQuotes(value: unknown) {
+  const text = asString(value).trim();
+  const unescaped = text.replace(/\\"/g, '"');
+  return unescaped.replace(/^"+|"+$/g, '');
+}
+
+function parseHttpByteRange(rangeHeader: string | undefined, totalSize: number) {
+  const value = asString(rangeHeader);
+  const matched = value.match(/^bytes=(\d*)-(\d*)$/i);
+  if (!matched || totalSize <= 0) {
+    return null;
+  }
+
+  const [, startText, endText] = matched;
+  let start = 0;
+  let end = totalSize - 1;
+
+  if (startText && endText) {
+    start = Number(startText);
+    end = Number(endText);
+  } else if (startText) {
+    start = Number(startText);
+  } else if (endText) {
+    const suffixLength = Number(endText);
+    if (!Number.isFinite(suffixLength) || suffixLength <= 0) {
+      return null;
+    }
+    start = Math.max(totalSize - suffixLength, 0);
+  } else {
+    return null;
+  }
+
+  if (!Number.isFinite(start) || !Number.isFinite(end)) {
+    return null;
+  }
+
+  start = Math.trunc(start);
+  end = Math.trunc(end);
+  if (start < 0 || end < start || start >= totalSize) {
+    return null;
+  }
+  if (end >= totalSize) {
+    end = totalSize - 1;
+  }
+  return { start, end };
+}
+
+function setArtifactResponseHeaders(res: Response | undefined, file: ArtifactDownloadFile, contentLength = file.file_size_bytes) {
+  res?.setHeader('Content-Type', file.content_type);
+  res?.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.file_name)}`);
+  res?.setHeader('Content-Length', String(contentLength));
+  res?.setHeader('Accept-Ranges', 'bytes');
+  res?.setHeader('ETag', file.etag);
+  res?.setHeader('Cache-Control', 'no-cache');
+}
+
 function releaseKindLabel(kind: ReleaseKind) {
   if (kind === 'software') return '软件版本';
   return '硬件版本';
@@ -171,7 +251,7 @@ function generateReleaseCode(input: {
 }
 
 @Injectable()
-class FirmwareService {
+export class FirmwareService {
   constructor(
     private readonly db: DatabaseService,
     private readonly configService: ConfigService,
@@ -335,13 +415,8 @@ class FirmwareService {
     return `${publicWebBase.replace(/\/+$/, '')}/api/v1`;
   }
 
-  private resolveFirmwarePublicBinaryBaseUrl() {
-    return (
-      this.configService.get<string>('FIRMWARE_PUBLIC_BINARY_BASE_URL') ||
-      this.configService.get<string>('PUBLIC_WEB_BASE_URL') ||
-      this.configService.get<string>('PORTAL_PUBLIC_BASE_URL') ||
-      'http://xupengpeng.top'
-    ).replace(/\/+$/, '');
+  private resolveConfiguredFirmwarePublicBinaryBaseUrl() {
+    return asString(this.configService.get<string>('FIRMWARE_PUBLIC_BINARY_BASE_URL')).replace(/\/+$/, '');
   }
 
   private buildArtifactDownloadUrl(artifactId: string) {
@@ -365,11 +440,81 @@ class FirmwareService {
   }
 
   private buildPackageDownloadUrl(release: Record<string, any>, binaryArtifact: Record<string, any>) {
+    const explicitBinaryBaseUrl = this.resolveConfiguredFirmwarePublicBinaryBaseUrl();
     const fileName = this.buildPublicBinaryFileName(release, binaryArtifact);
-    if (fileName) {
-      return `${this.resolveFirmwarePublicBinaryBaseUrl()}/${fileName}`;
+    if (explicitBinaryBaseUrl && fileName) {
+      return `${explicitBinaryBaseUrl}/${fileName}`;
     }
     return this.buildArtifactDownloadUrl(asString(binaryArtifact.id));
+  }
+
+  private async resolveUpgradePackageDispatchMetadata(detail: JsonObject, fallbackArtifactId?: string) {
+    const packageUrl = asString(detail.package_download_url);
+    const rawPackageSize = Number(detail.package_size_bytes ?? 0);
+    const packageSize = Number.isFinite(rawPackageSize) && rawPackageSize > 0 ? Math.trunc(rawPackageSize) : null;
+    const existingPackageEtag = normalizeStrongEtag(detail.package_etag);
+
+    if (!packageUrl) {
+      throw new Error('missing package_download_url');
+    }
+
+    if (existingPackageEtag) {
+      return {
+        packageUrl,
+        packageSize,
+        packageEtag: existingPackageEtag,
+      };
+    }
+
+    const probeCandidate = async (candidateUrl: string) => {
+      const response = await fetch(candidateUrl, {
+        method: 'HEAD',
+        redirect: 'follow',
+      });
+      if (!response.ok) {
+        throw new Error(`package HEAD failed: ${response.status} ${response.statusText}`);
+      }
+
+      const contentType = asString(response.headers.get('content-type')).toLowerCase();
+      if (!contentType.startsWith('application/octet-stream')) {
+        throw new Error(`package HEAD invalid content-type: ${contentType || 'missing'}`);
+      }
+
+      const acceptRanges = asString(response.headers.get('accept-ranges')).toLowerCase();
+      if (acceptRanges !== 'bytes') {
+        throw new Error(`package HEAD invalid accept-ranges: ${acceptRanges || 'missing'}`);
+      }
+
+      const packageEtag = normalizeStrongEtag(response.headers.get('etag'));
+      if (!packageEtag) {
+        throw new Error('package HEAD missing strong ETag');
+      }
+
+      const headerContentLength = Number(response.headers.get('content-length'));
+      const resolvedPackageSize =
+        Number.isFinite(headerContentLength) && headerContentLength > 0
+          ? Math.trunc(headerContentLength)
+          : packageSize;
+      if (packageSize !== null && resolvedPackageSize !== null && packageSize !== resolvedPackageSize) {
+        throw new Error(`package size mismatch: manifest=${packageSize} head=${resolvedPackageSize}`);
+      }
+
+      return {
+        packageUrl: candidateUrl,
+        packageSize: resolvedPackageSize,
+        packageEtag,
+      };
+    };
+
+    try {
+      return await probeCandidate(packageUrl);
+    } catch (primaryError) {
+      const fallbackUrl = fallbackArtifactId ? this.buildArtifactDownloadUrl(fallbackArtifactId) : '';
+      if (!fallbackUrl || fallbackUrl === packageUrl) {
+        throw primaryError;
+      }
+      return probeCandidate(fallbackUrl);
+    }
   }
 
   private normalizeUpgradeItemStage(value: unknown) {
@@ -378,10 +523,16 @@ class FirmwareService {
       [
         'pending',
         'command_sent',
+        'accepted',
         'command_acked',
         'downloading',
+        'downloaded',
+        'verified',
+        'staged',
+        'scheduled',
         'installing',
         'rebooting',
+        'boot_confirmed',
         'rollback_running',
         'rollback_succeeded',
         'rollback_failed',
@@ -406,6 +557,8 @@ class FirmwareService {
     if (input.stage === 'rollback_running') return 'rollback_running';
     if (input.stage === 'rollback_succeeded') return 'rollback_succeeded';
     if (input.stage === 'rollback_failed') return 'rollback_failed';
+    if (result === 'boot_confirmed' || input.stage === 'boot_confirmed') return 'boot_confirmed';
+    if (result === 'accepted' && input.stage === 'pending') return 'accepted';
     if (result === 'succeeded' || input.stage === 'succeeded') return 'succeeded';
     if (input.commandAccepted && input.stage === 'pending') return 'command_acked';
     return input.stage;
@@ -456,12 +609,24 @@ class FirmwareService {
       asString(input.lastErrorMessage) ||
       this.describeUpgradeBlockingReason(blockingReasonCode);
 
+    if (status === 'boot_confirmed' || stage === 'boot_confirmed') {
+      return {
+        effectiveStatus: 'boot_confirmed' as UpgradeItemStatus,
+        effectiveStage: 'boot_confirmed' as UpgradeItemStatus,
+        state: 'upgrade_succeeded',
+        summary: '设备已完成 boot_confirmed，平台判定升级成功。',
+        awaitingDeviceAck: false,
+        blockingReasonCode: null,
+        blockingReasonText: null,
+      };
+    }
+
     if (status === 'succeeded' || stage === 'succeeded') {
       return {
         effectiveStatus: 'succeeded' as UpgradeItemStatus,
         effectiveStage: 'succeeded' as UpgradeItemStatus,
         state: 'upgrade_succeeded',
-        summary: '设备已回报升级成功。',
+        summary: '设备已回报旧版 succeeded 成功状态；建议升级到 boot_confirmed 终态语义。',
         awaitingDeviceAck: false,
         blockingReasonCode: null,
         blockingReasonText: null,
@@ -498,7 +663,18 @@ class FirmwareService {
     }
 
     if (
-      ['downloading', 'installing', 'rebooting', 'rollback_running', 'rollback_succeeded', 'rollback_failed'].includes(
+      [
+        'downloading',
+        'downloaded',
+        'verified',
+        'staged',
+        'scheduled',
+        'installing',
+        'rebooting',
+        'rollback_running',
+        'rollback_succeeded',
+        'rollback_failed',
+      ].includes(
         stage
       )
     ) {
@@ -513,12 +689,20 @@ class FirmwareService {
       };
     }
 
-    if (stage === 'command_acked' || status === 'command_acked' || input.commandStatus === 'acked') {
+    if (
+      stage === 'accepted' ||
+      status === 'accepted' ||
+      stage === 'command_acked' ||
+      status === 'command_acked' ||
+      input.commandStatus === 'acked'
+    ) {
+      const effectiveAcceptedStage =
+        stage === 'accepted' || status === 'accepted' ? 'accepted' : 'command_acked';
       return {
-        effectiveStatus: 'command_acked' as UpgradeItemStatus,
-        effectiveStage: 'command_acked' as UpgradeItemStatus,
+        effectiveStatus: effectiveAcceptedStage as UpgradeItemStatus,
+        effectiveStage: effectiveAcceptedStage as UpgradeItemStatus,
         state: 'command_acknowledged',
-        summary: '设备已确认升级指令，正在等待下载或安装进度。',
+        summary: '设备已接受升级事务，正在等待下载、校验、分槽或重启进度。',
         awaitingDeviceAck: false,
         blockingReasonCode: null,
         blockingReasonText: null,
@@ -578,7 +762,10 @@ class FirmwareService {
   }
 
   private shouldAutoDispatchUpgrade(requested: unknown) {
-    if (requested !== undefined && requested !== null && asString(requested) !== '') {
+    if (requested !== undefined && requested !== null) {
+      if (typeof requested === 'string' && requested.trim() === '') {
+        return asBoolean(this.configService.get<string>('FIRMWARE_UPGRADE_AUTO_DISPATCH'));
+      }
       return asBoolean(requested);
     }
     return asBoolean(this.configService.get<string>('FIRMWARE_UPGRADE_AUTO_DISPATCH'));
@@ -704,12 +891,24 @@ class FirmwareService {
               when i.status = 'command_sent' and dc.command_status in ('failed', 'dead_letter') then 'failed'
               when i.status = 'command_sent' and dc.command_status = 'acked' then 'command_acked'
               else i.status
-            end in ('command_sent', 'command_acked', 'downloading', 'installing', 'rebooting')
+            end in (
+              'command_sent',
+              'accepted',
+              'command_acked',
+              'downloading',
+              'downloaded',
+              'verified',
+              'staged',
+              'scheduled',
+              'installing',
+              'rebooting'
+            )
           ) as active_count
           ,
           count(*) filter (where i.status = 'command_sent' and dc.command_status = 'sent') as awaiting_ack_count,
           count(*) filter (
             where (i.status = 'command_sent' and dc.command_status = 'acked')
+               or i.status = 'accepted'
                or i.status = 'command_acked'
           ) as acked_waiting_progress_count,
           count(*) filter (
@@ -780,9 +979,20 @@ class FirmwareService {
         count(*)::int as total,
         count(*) filter (where effective_status = 'pending')::int as pending,
         count(*) filter (
-          where effective_status in ('command_sent', 'command_acked', 'downloading', 'installing', 'rebooting')
+          where effective_status in (
+            'command_sent',
+            'accepted',
+            'command_acked',
+            'downloading',
+            'downloaded',
+            'verified',
+            'staged',
+            'scheduled',
+            'installing',
+            'rebooting'
+          )
         )::int as active,
-        count(*) filter (where effective_status = 'succeeded')::int as success,
+        count(*) filter (where effective_status in ('boot_confirmed', 'succeeded'))::int as success,
         count(*) filter (where effective_status = 'failed')::int as failed,
         count(*) filter (where effective_status = 'cancelled')::int as cancelled
       from (
@@ -1279,8 +1489,13 @@ class FirmwareService {
         a.id,
         a.file_name,
         a.content_type,
-        a.storage_path
+        a.storage_path,
+        a.file_size_bytes,
+        r.checksum
       from device_release_artifact a
+      left join device_release_registry r
+        on r.tenant_id = a.tenant_id
+       and r.id = a.release_id
       where a.tenant_id = $1 and a.id = $2
       limit 1
       `,
@@ -1293,10 +1508,15 @@ class FirmwareService {
     if (!fs.existsSync(row.storage_path)) {
       throw new NotFoundException('附件文件不存在');
     }
+    const stat = fs.statSync(row.storage_path);
+    const fileSizeBytes = Number(row.file_size_bytes ?? 0) > 0 ? Number(row.file_size_bytes) : stat.size;
+    const checksumEtag = normalizeStrongEtag(row.checksum);
     return {
       file_name: row.file_name,
       content_type: row.content_type || 'application/octet-stream',
       absolute_path: row.storage_path,
+      file_size_bytes: fileSizeBytes,
+      etag: checksumEtag || `"artifact-${artifactId}-${fileSizeBytes}-${Math.trunc(stat.mtimeMs)}"`,
     };
   }
 
@@ -1344,12 +1564,24 @@ class FirmwareService {
               when i.status = 'command_sent' and dc.command_status in ('failed', 'dead_letter') then 'failed'
               when i.status = 'command_sent' and dc.command_status = 'acked' then 'command_acked'
               else i.status
-            end in ('command_sent', 'command_acked', 'downloading', 'installing', 'rebooting')
+            end in (
+              'command_sent',
+              'accepted',
+              'command_acked',
+              'downloading',
+              'downloaded',
+              'verified',
+              'staged',
+              'scheduled',
+              'installing',
+              'rebooting'
+            )
           ) as active_count
           ,
           count(*) filter (where i.status = 'command_sent' and dc.command_status = 'sent') as awaiting_ack_count,
           count(*) filter (
             where (i.status = 'command_sent' and dc.command_status = 'acked')
+               or i.status = 'accepted'
                or i.status = 'command_acked'
           ) as acked_waiting_progress_count,
           count(*) filter (
@@ -1691,7 +1923,15 @@ class FirmwareService {
     }
 
     const items = await this.listJobItemsByJobId(jobId);
-    const dispatchable = items.filter((item) => item.status === 'pending' || item.status === 'failed');
+    const dispatchable = items.filter((item) => {
+      const gatewayCommandStatus = asString(item.command_status).toLowerCase();
+      const canIssueOrReuseCommand =
+        !gatewayCommandStatus || gatewayCommandStatus === 'failed' || gatewayCommandStatus === 'dead_letter';
+      if (item.status === 'command_sent' && canIssueOrReuseCommand) return true;
+      if (item.status === 'failed') return canIssueOrReuseCommand;
+      if (item.status !== 'pending') return false;
+      return canIssueOrReuseCommand;
+    });
     if (dispatchable.length === 0) {
       return {
         ...job,
@@ -1704,47 +1944,75 @@ class FirmwareService {
 
     for (const item of dispatchable) {
       const detail = asObject(item.detail_json);
+      const gatewayCommandStatus = asString(item.command_status).toLowerCase();
       try {
-        const result = await this.deviceGatewayService.dispatchExecuteAction({
-          target_device_id: item.device_id,
-          imei: item.imei,
-          action_code: 'upgrade_firmware',
-          scope: 'common',
-          payload: {
-            params: {
-              upgrade_token: item.upgrade_token,
-              upgrade_job_id: item.job_id,
-              upgrade_item_id: item.id,
-              release_id: item.release_id,
-              release_code: item.target_version,
-              package_artifact_id: item.package_artifact_id,
-              package_download_url: asString(detail.package_download_url),
-              package_file_name: item.package_file_name,
-              package_checksum: item.package_checksum,
-              package_size_bytes: detail.package_size_bytes ?? null,
+        const packageMeta = await this.resolveUpgradePackageDispatchMetadata(detail, asString(item.package_artifact_id));
+        const command =
+          asString(item.command_id) && ['failed', 'dead_letter'].includes(gatewayCommandStatus)
+            ? await this.deviceGatewayService.requeueCommand(asString(item.command_id))
+            : null;
+        const created =
+          command ??
+          (await this.deviceGatewayService.dispatchExecuteAction({
+            target_device_id: item.device_id,
+            imei: item.imei,
+            action_code: 'upgrade_firmware',
+            scope: 'common',
+            payload: {
+              params: {
+                ut: item.upgrade_token,
+                rcd: item.target_version,
+                url: packageMeta.packageUrl,
+                sz: packageMeta.packageSize,
+                sum: item.package_checksum,
+                etag: packageMeta.packageEtag,
+              },
             },
-          },
-          source: 'firmware_remote_upgrade.dispatch',
-        });
-        await this.tcpServer.dispatchQueuedCommandNow(result.command.command_token);
+            source: 'firmware_remote_upgrade.dispatch',
+          })).command;
+        const commandId = asString((created as { id?: string; command_id?: string }).id ?? (created as { command_id?: string }).command_id);
+        const commandToken = asString(
+          (created as { command_token?: string; commandToken?: string }).command_token ??
+            (created as { commandToken?: string }).commandToken
+        );
+        const delivery = await this.tcpServer.dispatchQueuedCommandNow(commandToken);
+        const delivered = delivery.delivered === true && delivery.command_status === 'sent';
+        const nextDetail = {
+          ...detail,
+          package_download_url: packageMeta.packageUrl,
+          package_size_bytes: packageMeta.packageSize,
+          package_etag: packageMeta.packageEtag,
+          last_dispatch_at: new Date().toISOString(),
+          last_dispatch_delivery: delivery,
+        };
 
         await this.db.query(
           `
           update device_upgrade_job_item
-          set status = 'command_sent',
-              stage = 'command_sent',
+          set status = $5,
+              stage = $6,
               progress_percent = greatest(progress_percent, 0),
               command_id = $3::uuid,
               command_token = $4::uuid,
-              detail_json = jsonb_set(coalesce(detail_json, '{}'::jsonb), '{last_dispatch_at}', to_jsonb(now()::text), true),
+              detail_json = $7::jsonb,
               last_error_code = null,
               last_error_message = null,
               updated_at = now()
           where tenant_id = $1 and id = $2
           `,
-          [TENANT_ID, item.id, result.command.id, result.command.command_token]
+          [
+            TENANT_ID,
+            item.id,
+            commandId,
+            commandToken,
+            delivered ? 'command_sent' : 'pending',
+            delivered ? 'command_sent' : 'pending',
+            JSON.stringify(nextDetail),
+          ]
         );
-        dispatchedCount += 1;
+        if (delivered) {
+          dispatchedCount += 1;
+        }
       } catch (error) {
         await this.db.query(
           `
@@ -1824,7 +2092,10 @@ class FirmwareService {
       const nextStatus = this.deriveUpgradeItemStatus({
         stage,
         result: body.result,
-        commandAccepted: stage === 'command_acked',
+        commandAccepted:
+          stage === 'accepted' ||
+          stage === 'command_acked' ||
+          asString(body.result).toLowerCase() === 'accepted',
       });
       const detail = {
         ...asObject(item.detail_json),
@@ -1888,12 +2159,25 @@ class FirmwareService {
         set status = 'pending',
             stage = 'pending',
             progress_percent = 0,
-            command_id = null,
-            command_token = null,
             last_error_code = null,
             last_error_message = null,
             updated_at = now()
-        where tenant_id = $1 and job_id = $2 and status in ('failed', 'cancelled')
+        where tenant_id = $1
+          and job_id = $2
+          and (
+            status in ('failed', 'cancelled')
+            or (
+              status = 'command_sent'
+              and command_id is not null
+              and exists (
+                select 1
+                from device_command dc
+                where dc.tenant_id = device_upgrade_job_item.tenant_id
+                  and dc.id = device_upgrade_job_item.command_id
+                  and dc.command_status in ('failed', 'dead_letter')
+              )
+            )
+          )
         `,
         [TENANT_ID, jobId],
         client
@@ -1977,12 +2261,36 @@ class FirmwareController {
     return ok(await this.service.bootstrapScanControllerBaseline());
   }
 
-  @Get('artifacts/:id/download')
-  async downloadArtifact(@Param('id') id: string, @Res({ passthrough: true }) res?: Response) {
+  @Head('artifacts/:id/download')
+  async headArtifact(@Param('id') id: string, @Res() res: Response) {
     const file = await this.service.downloadArtifact(id);
-    res?.setHeader('Content-Type', file.content_type);
-    res?.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(file.file_name)}`);
-    return new StreamableFile(fs.createReadStream(file.absolute_path));
+    setArtifactResponseHeaders(res, file);
+    res.status(HttpStatus.OK).end();
+  }
+
+  @Get('artifacts/:id/download')
+  async downloadArtifact(@Param('id') id: string, @Req() req: Request, @Res() res: Response) {
+    const file = await this.service.downloadArtifact(id);
+    const range = parseHttpByteRange(req.headers.range, file.file_size_bytes);
+
+    if (req.headers.range && !range) {
+      res.setHeader('Content-Range', `bytes */${file.file_size_bytes}`);
+      res.status(HttpStatus.REQUESTED_RANGE_NOT_SATISFIABLE).end();
+      return;
+    }
+
+    if (range) {
+      const contentLength = range.end - range.start + 1;
+      setArtifactResponseHeaders(res, file, contentLength);
+      res.setHeader('Content-Range', `bytes ${range.start}-${range.end}/${file.file_size_bytes}`);
+      res.status(HttpStatus.PARTIAL_CONTENT);
+      fs.createReadStream(file.absolute_path, { start: range.start, end: range.end }).pipe(res);
+      return;
+    }
+
+    setArtifactResponseHeaders(res, file);
+    res.status(HttpStatus.OK);
+    fs.createReadStream(file.absolute_path).pipe(res);
   }
 
   @Get('upgrade-jobs')

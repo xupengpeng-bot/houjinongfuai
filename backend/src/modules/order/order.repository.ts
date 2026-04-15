@@ -59,12 +59,21 @@ export class OrderRepository {
       billingPackageName: string | null;
       wellCode: string | null;
       wellDisplayName: string | null;
+      sessionStatus: string | null;
       status: string;
       settlementStatus: string;
       chargeDurationSec: number | null;
       chargeVolume: number | null;
       unitType: string | null;
       amount: number;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      endReasonCode: string | null;
       startedAt: string | null;
       endedAt: string | null;
       pricingSnapshot: Record<string, unknown>;
@@ -81,12 +90,21 @@ export class OrderRepository {
         bp.package_name as "billingPackageName",
         w.well_code as "wellCode",
         coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        rs.status as "sessionStatus",
         io.status,
         io.settlement_status as "settlementStatus",
         io.charge_duration_sec as "chargeDurationSec",
         io.charge_volume as "chargeVolume",
         bp.unit_type as "unitType",
         io.amount,
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
+        io.prepaid_amount as "prepaidAmount",
+        io.locked_amount as "lockedAmount",
+        io.refunded_amount as "refundedAmount",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        rs.end_reason_code as "endReasonCode",
         rs.started_at as "startedAt",
         rs.ended_at as "endedAt",
         io.pricing_snapshot_json as "pricingSnapshot",
@@ -101,35 +119,190 @@ export class OrderRepository {
     return result.rows;
   }
 
+  async findPage(params?: { page?: number; pageSize?: number; targetImei?: string | null }) {
+    const page = Math.max(1, params?.page ?? 1);
+    const pageSize = Math.min(200, Math.max(1, params?.pageSize ?? 20));
+    const offset = (page - 1) * pageSize;
+    const whereClauses: string[] = [];
+    const values: Array<string | number> = [];
+
+    if (params?.targetImei?.trim()) {
+      values.push(params.targetImei.trim());
+      whereClauses.push(`io.target_imei = $${values.length}`);
+    }
+
+    values.push(pageSize);
+    const limitPlaceholder = `$${values.length}`;
+    values.push(offset);
+    const offsetPlaceholder = `$${values.length}`;
+    const whereSql = whereClauses.length ? `where ${whereClauses.join(' and ')}` : '';
+
+    const result = await this.db.query<{
+      id: string;
+      orderNo: string;
+      sessionId: string;
+      sessionRef: string | null;
+      userId: string;
+      userDisplayName: string | null;
+      userMobile: string | null;
+      billingPackageId: string;
+      billingPackageName: string | null;
+      wellCode: string | null;
+      wellDisplayName: string | null;
+      sessionStatus: string | null;
+      status: string;
+      settlementStatus: string;
+      chargeDurationSec: number | null;
+      chargeVolume: number | null;
+      unitType: string | null;
+      amount: number;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      endReasonCode: string | null;
+      startedAt: string | null;
+      endedAt: string | null;
+      pricingSnapshot: Record<string, unknown>;
+      pricingDetail: Record<string, unknown>;
+      total: string;
+    }>(
+      `
+      select
+        io.id,
+        io.order_no as "orderNo",
+        io.session_id as "sessionId",
+        rs.session_ref as "sessionRef",
+        io.user_id as "userId",
+        su.display_name as "userDisplayName",
+        su.mobile as "userMobile",
+        io.billing_package_id as "billingPackageId",
+        bp.package_name as "billingPackageName",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        rs.status as "sessionStatus",
+        io.status,
+        io.settlement_status as "settlementStatus",
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        bp.unit_type as "unitType",
+        io.amount,
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
+        io.prepaid_amount as "prepaidAmount",
+        io.locked_amount as "lockedAmount",
+        io.refunded_amount as "refundedAmount",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        rs.end_reason_code as "endReasonCode",
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        io.pricing_snapshot_json as "pricingSnapshot",
+        io.pricing_detail_json as "pricingDetail",
+        count(*) over() as total
+      from irrigation_order io
+      join sys_user su on su.id = io.user_id
+      join runtime_session rs on rs.id = io.session_id
+      join well w on w.id = rs.well_id
+      join billing_package bp on bp.id = io.billing_package_id
+      ${whereSql}
+      order by io.created_at desc
+      limit ${limitPlaceholder}
+      offset ${offsetPlaceholder}
+      `,
+      values
+    );
+
+    return {
+      rows: result.rows,
+      total: Number(result.rows[0]?.total ?? 0),
+      page,
+      pageSize,
+    };
+  }
+
   async findById(id: string, client?: PoolClient) {
     const result = await this.db.query<{
       id: string;
       orderNo: string;
       sessionId: string;
       userId: string;
+      userDisplayName: string | null;
+      userMobile: string | null;
       billingPackageId: string;
+      billingPackageName: string | null;
+      wellCode: string | null;
+      wellDisplayName: string | null;
+      unitType: string | null;
+      sessionRef: string | null;
+      sessionStatus: string | null;
       status: string;
       settlementStatus: string;
       chargeDurationSec: number | null;
+      chargeVolume: number | null;
       amount: number;
+      orderChannel: string | null;
+      fundingMode: string | null;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      sourcePaymentIntentId: string | null;
+      endReasonCode: string | null;
+      startedAt: string | null;
+      endedAt: string | null;
       pricingSnapshot: Record<string, unknown>;
       pricingDetail: Record<string, unknown>;
+      checkoutSnapshot: Record<string, unknown>;
     }>(
       `
       select
-        id,
-        order_no as "orderNo",
-        session_id as "sessionId",
-        user_id as "userId",
-        billing_package_id as "billingPackageId",
-        status,
-        settlement_status as "settlementStatus",
-        charge_duration_sec as "chargeDurationSec",
-        amount,
-        pricing_snapshot_json as "pricingSnapshot",
-        pricing_detail_json as "pricingDetail"
-      from irrigation_order
-      where id = $1
+        io.id,
+        io.order_no as "orderNo",
+        io.session_id as "sessionId",
+        io.user_id as "userId",
+        su.display_name as "userDisplayName",
+        su.mobile as "userMobile",
+        io.billing_package_id as "billingPackageId",
+        bp.package_name as "billingPackageName",
+        w.well_code as "wellCode",
+        coalesce(w.safety_profile_json->>'displayName', w.well_code) as "wellDisplayName",
+        bp.unit_type as "unitType",
+        rs.session_ref as "sessionRef",
+        rs.status as "sessionStatus",
+        io.status,
+        io.settlement_status as "settlementStatus",
+        io.charge_duration_sec as "chargeDurationSec",
+        io.charge_volume as "chargeVolume",
+        io.amount,
+        io.order_channel as "orderChannel",
+        io.funding_mode as "fundingMode",
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
+        io.prepaid_amount as "prepaidAmount",
+        io.locked_amount as "lockedAmount",
+        io.refunded_amount as "refundedAmount",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        io.source_payment_intent_id::text as "sourcePaymentIntentId",
+        rs.end_reason_code as "endReasonCode",
+        rs.started_at as "startedAt",
+        rs.ended_at as "endedAt",
+        io.pricing_snapshot_json as "pricingSnapshot",
+        io.pricing_detail_json as "pricingDetail",
+        io.checkout_snapshot_json as "checkoutSnapshot"
+      from irrigation_order io
+      join sys_user su on su.id = io.user_id
+      join runtime_session rs on rs.id = io.session_id
+      join well w on w.id = rs.well_id
+      join billing_package bp on bp.id = io.billing_package_id
+      where io.id = $1
       `,
       [id],
       client
@@ -148,11 +321,20 @@ export class OrderRepository {
       unitType: string | null;
       startedAt: string | null;
       endedAt: string | null;
+      sessionStatus: string | null;
       status: string;
       settlementStatus: string;
       chargeDurationSec: number | null;
       chargeVolume: number | null;
       amount: number;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      endReasonCode: string | null;
       pricingDetail: Record<string, unknown>;
     }>(
       `
@@ -166,11 +348,20 @@ export class OrderRepository {
         bp.unit_type as "unitType",
         rs.started_at as "startedAt",
         rs.ended_at as "endedAt",
+        rs.status as "sessionStatus",
         io.status,
         io.settlement_status as "settlementStatus",
         io.charge_duration_sec as "chargeDurationSec",
         io.charge_volume as "chargeVolume",
         io.amount,
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
+        io.prepaid_amount as "prepaidAmount",
+        io.locked_amount as "lockedAmount",
+        io.refunded_amount as "refundedAmount",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        rs.end_reason_code as "endReasonCode",
         io.pricing_detail_json as "pricingDetail"
       from irrigation_order io
       join runtime_session rs on rs.id = io.session_id
@@ -197,11 +388,20 @@ export class OrderRepository {
       unitType: string | null;
       startedAt: string | null;
       endedAt: string | null;
+      sessionStatus: string | null;
       status: string;
       settlementStatus: string;
       chargeDurationSec: number | null;
       chargeVolume: number | null;
       amount: number;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      endReasonCode: string | null;
       pricingDetail: Record<string, unknown>;
       total: string;
     }>(
@@ -216,11 +416,20 @@ export class OrderRepository {
         bp.unit_type as "unitType",
         rs.started_at as "startedAt",
         rs.ended_at as "endedAt",
+        rs.status as "sessionStatus",
         io.status,
         io.settlement_status as "settlementStatus",
         io.charge_duration_sec as "chargeDurationSec",
         io.charge_volume as "chargeVolume",
         io.amount,
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
+        io.prepaid_amount as "prepaidAmount",
+        io.locked_amount as "lockedAmount",
+        io.refunded_amount as "refundedAmount",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        rs.end_reason_code as "endReasonCode",
         io.pricing_detail_json as "pricingDetail",
         count(*) over()::text as total
       from irrigation_order io
@@ -252,8 +461,17 @@ export class OrderRepository {
       amount: number;
       orderChannel: string | null;
       fundingMode: string | null;
+      paymentMode: string | null;
+      paymentStatus: string | null;
+      prepaidAmount: number | null;
+      lockedAmount: number | null;
+      refundedAmount: number | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      sourcePaymentIntentId: string | null;
       pricingSnapshot: Record<string, unknown>;
       pricingDetail: Record<string, unknown>;
+      checkoutSnapshot: Record<string, unknown>;
     }>(
       `
       select
@@ -269,8 +487,17 @@ export class OrderRepository {
         amount,
         order_channel as "orderChannel",
         funding_mode as "fundingMode",
+        payment_mode as "paymentMode",
+        payment_status as "paymentStatus",
+        prepaid_amount as "prepaidAmount",
+        locked_amount as "lockedAmount",
+        refunded_amount as "refundedAmount",
+        target_imei as "targetImei",
+        target_device_role as "targetDeviceRole",
+        source_payment_intent_id::text as "sourcePaymentIntentId",
         pricing_snapshot_json as "pricingSnapshot",
-        pricing_detail_json as "pricingDetail"
+        pricing_detail_json as "pricingDetail",
+        checkout_snapshot_json as "checkoutSnapshot"
       from irrigation_order
       where session_id = $1
       limit 1

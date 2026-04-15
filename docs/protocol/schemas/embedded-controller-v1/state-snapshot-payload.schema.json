@@ -1,0 +1,92 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "embedded-controller-v1/state-snapshot-payload.schema.json",
+  "title": "Embedded Controller State Snapshot Payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "firmware_family",
+    "controller_role",
+    "config_version",
+    "feature_modules",
+    "controller_state",
+    "channels"
+  ],
+  "properties": {
+    "firmware_family": {
+      "type": "string"
+    },
+    "controller_role": {
+      "type": "string"
+    },
+    "config_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "feature_modules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "controller_state": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["online", "mode", "run_state"],
+      "properties": {
+        "online": { "type": "boolean" },
+        "mode": {
+          "type": "string",
+          "enum": ["remote", "local", "manual", "offline"]
+        },
+        "run_state": {
+          "type": "string",
+          "enum": ["IDLE", "RUNNING", "STOPPED", "FAULT"]
+        },
+        "battery_voltage": { "type": "number" },
+        "solar_voltage": { "type": "number" }
+      }
+    },
+    "channels": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel_code",
+          "channel_role",
+          "channel_type",
+          "io_kind",
+          "enabled"
+        ],
+        "properties": {
+          "channel_code": { "type": "string" },
+          "channel_role": { "type": "string" },
+          "channel_type": {
+            "type": "string",
+            "enum": ["actuator", "sensor", "feedback", "bus", "power"]
+          },
+          "io_kind": {
+            "type": "string",
+            "enum": [
+              "relay_output",
+              "motor_driver",
+              "digital_input",
+              "analog_input",
+              "pulse_input",
+              "rs485_modbus",
+              "power_monitor"
+            ]
+          },
+          "enabled": { "type": "boolean" },
+          "state": { "type": ["string", "null"] },
+          "feedback_state": { "type": ["string", "null"] },
+          "value": { "type": ["number", "null"] },
+          "unit": { "type": ["string", "null"] },
+          "bind_target_code": { "type": ["string", "null"] }
+        }
+      }
+    }
+  }
+}

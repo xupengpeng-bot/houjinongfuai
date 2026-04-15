@@ -286,7 +286,7 @@ class CockpitOpsController {
         (
           select count(*)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_session_count,
         (
           select count(*)::int
@@ -303,7 +303,7 @@ class CockpitOpsController {
         (
           select count(distinct well_id)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_wells,
         coalesce((
           select sum(coalesce(io.charge_volume, 0))::numeric
@@ -361,7 +361,7 @@ class CockpitOpsController {
           from runtime_session rs
           join well w on w.id = rs.well_id
           where w.block_id = pb.id
-            and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+            and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ), 0) as running_well_count,
         coalesce((
           select count(*)::int
@@ -427,12 +427,12 @@ class CockpitOpsController {
         (
           select count(*)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_session_count,
         (
           select count(distinct well_id)::int
           from runtime_session
-          where status in ('pending_start', 'running', 'billing', 'stopping')
+          where status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         ) as running_well_count,
         (
           select count(*)::int
@@ -476,7 +476,7 @@ class CockpitOpsController {
       join well w on w.id = rs.well_id
       left join project_block pb on pb.id = w.block_id
       left join project p on p.id = pb.project_id
-      where rs.status in ('pending_start', 'running', 'billing', 'stopping')
+      where rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
       order by rs.updated_at desc
       limit 20
       `

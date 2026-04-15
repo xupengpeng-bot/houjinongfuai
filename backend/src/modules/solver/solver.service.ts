@@ -12,6 +12,7 @@ import {
   SolverPreviewRequestDto,
   SolverSimulateRequestDto
 } from './solver.dto';
+import { buildSolverRuntimeSnapshot, type SolverRuntimeSnapshot } from './solver-runtime';
 
 type SolverRuntimeIssue = {
   code: string;
@@ -67,6 +68,15 @@ type SolverRuntimeContext = {
   };
   blockers: SolverRuntimeIssue[];
   warnings: SolverRuntimeIssue[];
+};
+
+type SolverDeviceAvailabilityOverride = {
+  byRole: Record<string, unknown> | null;
+  devices: Record<string, unknown> | null;
+  wells: Record<string, unknown> | null;
+  pumps: Record<string, unknown> | null;
+  valves: Record<string, unknown> | null;
+  sensors: Record<string, unknown> | null;
 };
 
 type SolverReadModel = {
@@ -146,6 +156,7 @@ type SolverPlanBundle = {
   steps: Array<Record<string, unknown>>;
   plans: Array<Record<string, unknown>>;
   explanations: string[];
+  runtimeSnapshot: SolverRuntimeSnapshot | null;
 };
 
 @Injectable()
@@ -169,7 +180,8 @@ export class SolverService {
   }
 
   private async buildRuntimeContext(
-    pumpValveTopology: NonNullable<SolverReadModel['pumpValveTopology']>
+    pumpValveTopology: NonNullable<SolverReadModel['pumpValveTopology']>,
+    constraints?: Record<string, unknown>
   ): Promise<SolverRuntimeContext> {
     const deviceStates: SolverDeviceState[] = [
       {
@@ -203,6 +215,7 @@ export class SolverService {
         connectionState: pumpValveTopology.valveConnectionState
       }
     ];
+    const availabilityOverride = this.extractDeviceAvailabilityOverride(constraints);
 
     const [activeSessionsResult, queuePressureResult] = await Promise.all([
       this.db.query<{
@@ -221,7 +234,7 @@ export class SolverService {
           rs.started_at as "startedAt"
         from runtime_session rs
         where rs.well_id = $1
-          and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+          and rs.status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
         order by rs.created_at desc
         limit 5
         `,
@@ -320,6 +333,45 @@ export class SolverService {
 
     deviceStates.forEach((device) => {
       const deviceLabel = device.deviceName || device.deviceCode || device.role;
+      const simulatedAvailability = this.resolveDeviceAvailabilityOverride(
+        device,
+        pumpValveTopology,
+        availabilityOverride
+      );
+      if (simulatedAvailability === false) {
+        blockers.push(
+          this.buildRuntimeIssue(
+            `device_unavailable_${device.role}`,
+            'critical',
+            `${deviceLabel} is marked unavailable in the current simulation context.`
+          )
+        );
+        return;
+      }
+      if (simulatedAvailability === true) {
+        const actualStateIssues: string[] = [];
+        if (device.lifecycleState && device.lifecycleState !== 'active') {
+          actualStateIssues.push(`lifecycle=${device.lifecycleState}`);
+        }
+        if (device.onlineState && device.onlineState !== 'online') {
+          actualStateIssues.push(`online=${device.onlineState}`);
+        }
+        if (device.connectionState && device.connectionState !== 'connected') {
+          actualStateIssues.push(`connection=${device.connectionState}`);
+        }
+        if (actualStateIssues.length > 0) {
+          warnings.push(
+            this.buildRuntimeIssue(
+              `device_availability_override_${device.role}`,
+              'warning',
+              `${deviceLabel} is forced available by simulation override despite current ledger state (${actualStateIssues.join(
+                ', '
+              )}).`
+            )
+          );
+        }
+        return;
+      }
       if (device.lifecycleState && device.lifecycleState !== 'active') {
         blockers.push(
           this.buildRuntimeIssue(
@@ -577,11 +629,183 @@ export class SolverService {
           pumpValveTopologyReadModel: readModel
         };
         pumpValveTopology = topology;
-        runtimeContext = await this.buildRuntimeContext(topology);
+        runtimeContext = await this.buildRuntimeContext(topology, dto.constraints);
       }
     }
 
     return { networkModelVersion, networkGraphSnapshot, pumpValveTopology, runtimeContext };
+  }
+
+  private asObject(value: unknown): Record<string, unknown> | null {
+    return value && typeof value === 'object' && !Array.isArray(value) ? (value as Record<string, unknown>) : null;
+  }
+
+  private toOptionalBoolean(value: unknown): boolean | null {
+    if (typeof value === 'boolean') return value;
+    if (typeof value !== 'string') return null;
+    const normalized = value.trim().toLowerCase();
+    if (['true', '1', 'yes', 'y', 'online', 'available', 'enabled'].includes(normalized)) {
+      return true;
+    }
+    if (['false', '0', 'no', 'n', 'offline', 'unavailable', 'disabled'].includes(normalized)) {
+      return false;
+    }
+    return null;
+  }
+
+  private extractDeviceAvailabilityOverride(
+    constraints?: Record<string, unknown>
+  ): SolverDeviceAvailabilityOverride | null {
+    const root = this.asObject(constraints?.device_availability);
+    if (!root) return null;
+    return {
+      byRole: this.asObject(root.by_role),
+      devices: this.asObject(root.devices),
+      wells: this.asObject(root.wells),
+      pumps: this.asObject(root.pumps),
+      valves: this.asObject(root.valves),
+      sensors: this.asObject(root.sensors)
+    };
+  }
+
+  private resolveAvailabilityFromBucket(
+    bucket: Record<string, unknown> | null,
+    keys: Array<string | null | undefined>
+  ): boolean | null {
+    if (!bucket) return null;
+    for (const rawKey of keys) {
+      const key = typeof rawKey === 'string' ? rawKey.trim() : '';
+      if (!key) continue;
+      const resolved = this.toOptionalBoolean(bucket[key]);
+      if (resolved !== null) {
+        return resolved;
+      }
+    }
+    return null;
+  }
+
+  private resolveDeviceAvailabilityOverride(
+    device: SolverDeviceState,
+    pumpValveTopology: NonNullable<SolverReadModel['pumpValveTopology']>,
+    availabilityOverride: SolverDeviceAvailabilityOverride | null
+  ): boolean | null {
+    if (!availabilityOverride) return null;
+
+    const directByRole =
+      this.toOptionalBoolean(availabilityOverride.byRole?.[device.role]) ??
+      this.toOptionalBoolean((availabilityOverride as Record<string, unknown>)[device.role]);
+    if (directByRole !== null) {
+      return directByRole;
+    }
+
+    const entityId =
+      device.role === 'well'
+        ? pumpValveTopology.wellId
+        : device.role === 'pump'
+          ? pumpValveTopology.pumpId
+          : pumpValveTopology.valveId;
+    const entityName =
+      device.role === 'well'
+        ? pumpValveTopology.wellName
+        : device.role === 'pump'
+          ? pumpValveTopology.pumpName
+          : pumpValveTopology.valveName;
+    const roleBucket =
+      device.role === 'well'
+        ? availabilityOverride.wells
+        : device.role === 'pump'
+          ? availabilityOverride.pumps
+          : availabilityOverride.valves;
+    const candidateKeys = [entityId, entityName, device.deviceId, device.imei, device.deviceCode, device.deviceName];
+    return (
+      this.resolveAvailabilityFromBucket(roleBucket, candidateKeys) ??
+      this.resolveAvailabilityFromBucket(availabilityOverride.devices, [device.role, ...candidateKeys])
+    );
+  }
+
+  private extractActiveOutletIds(constraints?: Record<string, unknown>) {
+    const value = constraints?.active_outlet_ids;
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => (typeof item === 'string' ? item.trim() : ''))
+      .filter((item): item is string => Boolean(item));
+  }
+
+  private async loadGraphDraftSnapshotByVersion(versionId: string) {
+    const snapshotResult = await this.db.query<{ graph_draft_snapshot: unknown }>(
+      `
+      select source_meta_json->'graph_draft_snapshot' as graph_draft_snapshot
+      from network_model_version
+      where id = $1::uuid and is_published = true
+      `,
+      [versionId]
+    );
+    const snapshot = this.asObject(snapshotResult.rows[0]?.graph_draft_snapshot);
+    if (snapshot) {
+      return snapshot;
+    }
+
+    const [nodesResult, pipesResult] = await Promise.all([
+      this.db.query<{
+        node_code: string;
+        node_type: string;
+        altitude: string | number | null;
+      }>(
+        `
+        select node_code, node_type, altitude
+        from network_node
+        where version_id = $1::uuid
+        order by node_code asc
+        `,
+        [versionId]
+      ),
+      this.db.query<{
+        pipe_code: string;
+        pipe_type: string;
+        from_node_code: string;
+        to_node_code: string;
+        length_m: string | number | null;
+        diameter_mm: string | number | null;
+      }>(
+        `
+        select
+          np.pipe_code,
+          np.pipe_type,
+          nfrom.node_code as from_node_code,
+          nto.node_code as to_node_code,
+          np.length_m,
+          np.diameter_mm
+        from network_pipe np
+        join network_node nfrom on nfrom.id = np.from_node_id
+        join network_node nto on nto.id = np.to_node_id
+        where np.version_id = $1::uuid
+        order by np.pipe_code asc
+        `,
+        [versionId]
+      ),
+    ]);
+
+    if (nodesResult.rows.length === 0 && pipesResult.rows.length === 0) {
+      return null;
+    }
+
+    return {
+      import_mode: 'published_network_tables',
+      overwrite_existing: true,
+      nodes: nodesResult.rows.map((row) => ({
+        node_code: row.node_code,
+        node_type: row.node_type,
+        altitude: row.altitude,
+      })),
+      pipes: pipesResult.rows.map((row) => ({
+        pipe_code: row.pipe_code,
+        pipe_type: row.pipe_type,
+        from_node_code: row.from_node_code,
+        to_node_code: row.to_node_code,
+        length_m: row.length_m,
+        diameter_mm: row.diameter_mm,
+      })),
+    };
   }
 
   private normalizeObjective(value: unknown) {
@@ -849,16 +1073,27 @@ export class SolverService {
     };
   }
 
-  private buildPlanBundle(
+  private async buildPlanBundle(
     readModel: SolverReadModel,
     constraints?: Record<string, unknown>,
     requestedObjective?: unknown
-  ): SolverPlanBundle {
+  ): Promise<SolverPlanBundle> {
     const hasGraph =
       readModel.networkGraphSnapshot.nodeCount > 0 &&
       readModel.networkGraphSnapshot.pipeCount > 0;
     const runMinutes = this.toNumber(constraints?.run_minutes, 20);
     const objective = this.normalizeObjective(requestedObjective ?? constraints?.objective);
+    const activeOutletIds = this.extractActiveOutletIds(constraints);
+    const graphDraftSnapshot = hasGraph
+      ? await this.loadGraphDraftSnapshotByVersion(readModel.networkModelVersion.id)
+      : null;
+    const runtimeSnapshot =
+      graphDraftSnapshot && activeOutletIds.length > 0
+        ? buildSolverRuntimeSnapshot({
+            graphDraft: graphDraftSnapshot,
+            activeOutletIds,
+          })
+        : null;
 
     if (!hasGraph) {
       return {
@@ -883,7 +1118,8 @@ export class SolverService {
         units: [],
         steps: [],
         plans: [],
-        explanations: ['No published graph is available, so the solver cannot generate a dispatch plan.']
+        explanations: ['No published graph is available, so the solver cannot generate a dispatch plan.'],
+        runtimeSnapshot: null,
       };
     }
 
@@ -910,7 +1146,8 @@ export class SolverService {
         units: [],
         steps: [],
         plans: [],
-        explanations: ['A published graph exists, but no active pump-valve relation was provided for dispatch.']
+        explanations: ['A published graph exists, but no active pump-valve relation was provided for dispatch.'],
+        runtimeSnapshot,
       };
     }
 
@@ -988,13 +1225,14 @@ export class SolverService {
         `Current objective = ${objective}.`,
         `The solver scored ${candidatePlans.length} candidate sequence(s).`,
         `Selected sequence = ${selectedPlan.sequence_mode}; risk = ${selectedPlan.risk_level}; score = ${selectedPlan.total_score}.`
-      ]
+      ],
+      runtimeSnapshot,
     };
   }
 
   async preview(dto: SolverPreviewRequestDto) {
     const readModel = await this.buildReadModel(dto);
-    const planBundle = this.buildPlanBundle(readModel, dto.constraints);
+    const planBundle = await this.buildPlanBundle(readModel, dto.constraints);
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
@@ -1008,14 +1246,15 @@ export class SolverService {
         selected_plan_id: planBundle.selected_plan_id,
         units: planBundle.units,
         plans: planBundle.plans,
-        explanations: planBundle.explanations
+        explanations: planBundle.explanations,
+        runtime_snapshot: planBundle.runtimeSnapshot,
       }
     };
   }
 
   async plan(dto: SolverPlanRequestDto) {
     const readModel = await this.buildReadModel(dto);
-    const planBundle = this.buildPlanBundle(readModel, dto.constraints, dto.objective);
+    const planBundle = await this.buildPlanBundle(readModel, dto.constraints, dto.objective);
     return {
       contractVersion: SOLVER_CONTRACT_VERSION,
       status: 'accepted',
@@ -1031,7 +1270,8 @@ export class SolverService {
         steps: planBundle.steps,
         units: planBundle.units,
         plans: planBundle.plans,
-        explanations: planBundle.explanations
+        explanations: planBundle.explanations,
+        runtime_snapshot: planBundle.runtimeSnapshot,
       }
     };
   }

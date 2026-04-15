@@ -2,24 +2,27 @@ import { Body, Controller, Get, HttpException, HttpStatus, Injectable, Module, N
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
+import { BillingSubjectPolicyController } from './billing-subject-policy.controller';
+import { BillingSubjectPolicyService } from './billing-subject-policy.service';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 
 interface BillingPackagePayload {
   packageCode?: string;
   packageName?: string;
-  billingMode?: 'duration' | 'volume' | 'flat' | 'free';
+  billingMode?: 'duration' | 'time' | 'volume' | 'water' | 'energy' | 'electric' | 'water_energy' | 'water_electric' | 'flat' | 'free';
   unitPrice?: number;
   unitType?: string;
   scopeType?: string;
   scopeRefId?: string;
   minChargeAmount?: number;
   name?: string;
-  type?: 'duration' | 'volume' | 'free';
+  type?: 'duration' | 'time' | 'volume' | 'water' | 'energy' | 'electric' | 'water_energy' | 'water_electric' | 'free';
   unit?: string;
   price?: number;
   min_charge?: number;
   status?: 'active' | 'trial';
+  pricing_rules_json?: Record<string, unknown>;
 }
 
 function appException(status: HttpStatus, code: string, message: string, data: Record<string, unknown> = {}) {
@@ -37,7 +40,18 @@ function parsePageSize(value?: string, fallback = 20) {
 }
 
 function normalizeBillingMode(value?: string) {
-  if (value === 'duration' || value === 'volume') return value;
+  if (
+    value === 'duration' ||
+    value === 'time' ||
+    value === 'volume' ||
+    value === 'water' ||
+    value === 'energy' ||
+    value === 'electric' ||
+    value === 'water_energy' ||
+    value === 'water_electric'
+  ) {
+    return value;
+  }
   return 'free';
 }
 
@@ -64,7 +78,8 @@ class BillingService {
       price: Number(row.unit_price),
       min_charge: Number(row.min_charge_amount),
       status: row.status === 'active' ? 'active' : 'trial',
-      wells: Number(row.wells ?? 0)
+      wells: Number(row.wells ?? 0),
+      pricing_rules_json: row.pricing_rules_json ?? {}
     };
   }
 
@@ -127,7 +142,12 @@ class BillingService {
     if (isCreate && !mode) fieldErrors.type = ['type is required'];
     if (isCreate && !unit) fieldErrors.unit = ['unit is required'];
     if (isCreate && (price === undefined || price === null)) fieldErrors.price = ['price is required'];
-    if (mode && !['duration', 'volume', 'flat', 'free'].includes(mode)) fieldErrors.type = ['type is invalid'];
+    if (
+      mode &&
+      !['duration', 'time', 'volume', 'water', 'energy', 'electric', 'water_energy', 'water_electric', 'flat', 'free'].includes(mode)
+    ) {
+      fieldErrors.type = ['type is invalid'];
+    }
     if (Object.keys(fieldErrors).length > 0) {
       throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', { fieldErrors });
     }
@@ -190,10 +210,11 @@ class BillingService {
           unit_price,
           unit_type,
           min_charge_amount,
+          pricing_rules_json,
           scope_type,
           scope_ref_id,
           status
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8::jsonb, $9, $10, $11)
         returning id
         `,
         [
@@ -204,6 +225,7 @@ class BillingService {
           price,
           unit,
           minCharge,
+          JSON.stringify(dto.pricing_rules_json ?? {}),
           scopeType,
           scopeRefId,
           dto.status === 'active' ? 'active' : 'draft'
@@ -238,9 +260,10 @@ class BillingService {
             unit_price = $5,
             unit_type = $6,
             min_charge_amount = $7,
-            scope_type = $8,
-            scope_ref_id = $9,
-            status = $10,
+            pricing_rules_json = $8::jsonb,
+            scope_type = $9,
+            scope_ref_id = $10,
+            status = $11,
             updated_at = now()
         where tenant_id = $1 and id = $2
         `,
@@ -252,6 +275,7 @@ class BillingService {
           price,
           unit,
           minCharge,
+          JSON.stringify(dto.pricing_rules_json ?? existing.pricing_rules_json ?? {}),
           scopeType,
           scopeRefId,
           dto.status === undefined ? existing.status : dto.status === 'active' ? 'active' : 'draft'
@@ -289,7 +313,8 @@ class BillingController {
 }
 
 @Module({
-  controllers: [BillingController],
-  providers: [BillingService]
+  controllers: [BillingController, BillingSubjectPolicyController],
+  providers: [BillingService, BillingSubjectPolicyService],
+  exports: [BillingSubjectPolicyService]
 })
 export class BillingModule {}

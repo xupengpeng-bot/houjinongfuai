@@ -1,10 +1,21 @@
 import { ValidationPipe } from '@nestjs/common';
 import { NestFactory } from '@nestjs/core';
+import { json, text, urlencoded } from 'express';
 import { AppExceptionFilter } from './common/http/app-exception.filter';
 import { AppModule } from './app.module';
 
 async function bootstrap() {
   const app = await NestFactory.create(AppModule);
+  const largeJsonBodyLimit = '10mb';
+  app.use(
+    '/api/v1/payments/wechat/notify',
+    text({
+      type: ['application/xml', 'text/xml', '*/xml'],
+      limit: largeJsonBodyLimit
+    })
+  );
+  app.use(json({ limit: largeJsonBodyLimit }));
+  app.use(urlencoded({ extended: true, limit: largeJsonBodyLimit }));
   app.setGlobalPrefix('api/v1');
   /** 开发态允许任意 localhost / 127.0.0.1 端口，避免换端口后登录成功但 API 被 CORS 拦截导致白屏 */
   const devOrigins = process.env.NODE_ENV !== 'production';

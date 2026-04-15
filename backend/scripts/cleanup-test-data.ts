@@ -84,7 +84,6 @@ async function main() {
     { label: 'pump', sql: 'delete from pump' },
     { label: 'well', sql: 'delete from well' },
     { label: 'device', sql: 'delete from device' },
-    { label: 'device_type', sql: 'delete from device_type' },
     {
       label: 'sys_data_scope_region',
       sql: `

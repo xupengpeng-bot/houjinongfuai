@@ -66,6 +66,7 @@ export interface WellRuntimePolicyReadModel {
 export interface EffectivePolicy {
   priorityChain: string[];
   sourceIds: {
+    billingSubjectPolicyId?: string;
     policyId?: string;
     relationId: string;
     interactionPolicyId?: string;
@@ -90,6 +91,7 @@ export interface EffectivePolicy {
     unitPrice: number;
     unitType: string;
     minChargeAmount: number;
+    pricingRules?: Record<string, unknown>;
   };
   interaction: {
     confirmMode: string;
@@ -105,6 +107,7 @@ export interface EffectivePolicy {
     confirm_mode_source?: string;
   };
   raw: {
+    billingSubjectPolicy: Record<string, unknown> | null;
     wellRuntimePolicy: Record<string, unknown> | null;
     relationConfig: Record<string, unknown>;
     interactionPolicy: Record<string, unknown> | null;

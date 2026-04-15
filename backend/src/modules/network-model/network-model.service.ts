@@ -4,6 +4,7 @@ import { DatabaseService } from '../../common/db/database.service';
 export interface NetworkModelVersionRow {
   id: string;
   network_model_id: string;
+  block_id: string | null;
   version_no: number;
   is_published: boolean;
   published_at: Date | null;
@@ -18,9 +19,10 @@ export class NetworkModelService {
   async getPublishedVersion(networkModelId: string): Promise<NetworkModelVersionRow | null> {
     const r = await this.db.query<NetworkModelVersionRow>(
       `
-      select id, network_model_id, version_no, is_published, published_at, source_file_ref, created_at
+      select id, network_model_id, block_id, version_no, is_published, published_at, source_file_ref, created_at
       from network_model_version
       where network_model_id = $1 and is_published = true
+      order by published_at desc nulls last, created_at desc
       limit 1
       `,
       [networkModelId]
@@ -29,14 +31,15 @@ export class NetworkModelService {
   }
 
   /**
-   * Marks one version published for the model; clears other rows' publish flags (single published truth).
+   * Marks one version published for the model block; clears only sibling rows in the same block scope.
    */
   async publishVersion(networkModelId: string, versionId: string): Promise<NetworkModelVersionRow> {
-    const check = await this.db.query<{ id: string }>(
-      `select id from network_model_version where id = $1 and network_model_id = $2`,
+    const check = await this.db.query<{ id: string; block_id: string | null }>(
+      `select id, block_id::text as block_id from network_model_version where id = $1 and network_model_id = $2`,
       [versionId, networkModelId]
     );
-    if (!check.rows[0]) {
+    const targetVersion = check.rows[0];
+    if (!targetVersion) {
       throw new NotFoundException('network_model_version not found for this network_model');
     }
 
@@ -46,15 +49,16 @@ export class NetworkModelService {
         update network_model_version
         set is_published = false, published_at = null
         where network_model_id = $1
+          and block_id is not distinct from $2::uuid
         `,
-        [networkModelId]
+        [networkModelId, targetVersion.block_id]
       );
       const r = await client.query<NetworkModelVersionRow>(
         `
         update network_model_version
         set is_published = true, published_at = now()
         where id = $1 and network_model_id = $2
-        returning id, network_model_id, version_no, is_published, published_at, source_file_ref, created_at
+        returning id, network_model_id, block_id, version_no, is_published, published_at, source_file_ref, created_at
         `,
         [versionId, networkModelId]
       );
@@ -69,7 +73,7 @@ export class NetworkModelService {
   async getPublishedVersionById(versionId: string): Promise<NetworkModelVersionRow | null> {
     const r = await this.db.query<NetworkModelVersionRow>(
       `
-      select id, network_model_id, version_no, is_published, published_at, source_file_ref, created_at
+      select id, network_model_id, block_id, version_no, is_published, published_at, source_file_ref, created_at
       from network_model_version
       where id = $1 and is_published = true
       `,

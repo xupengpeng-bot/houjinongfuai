@@ -17,8 +17,24 @@ class IamController {
   constructor(private readonly db: DatabaseService) {}
 
   @Get('users')
-  async listUsers() {
-    const result = await this.db.query(`
+  async listUsers(@Query('page') pageRaw?: string, @Query('page_size') pageSizeRaw?: string) {
+    const page = Math.max(1, Number.parseInt(pageRaw ?? '1', 10) || 1);
+    const pageSize = Math.min(100, Math.max(1, Number.parseInt(pageSizeRaw ?? '20', 10) || 20));
+    const offset = (page - 1) * pageSize;
+
+    const result = await this.db.query<{
+      id: string;
+      name: string;
+      username: string;
+      role: 'admin' | 'operator' | 'farmer';
+      area: string;
+      phone: string;
+      status: 'active' | 'disabled';
+      balance: string | null;
+      locked_balance: string | null;
+      points: string | null;
+      total: string;
+    }>(`
       select
         u.id,
         u.display_name as name,
@@ -30,7 +46,11 @@ class IamController {
         end as role,
         coalesce(r.region_name, '--') as area,
         u.mobile as phone,
-        case when u.status = 'active' then 'active' else 'disabled' end as status
+        case when u.status = 'active' then 'active' else 'disabled' end as status,
+        case when u.user_type = 'farmer' then coalesce(fw.balance, 0)::text else null end as balance,
+        case when u.user_type = 'farmer' then coalesce(fw.locked_balance, 0)::text else null end as locked_balance,
+        case when u.user_type = 'farmer' then '0' else null end as points,
+        count(*) over()::text as total
       from sys_user u
       left join lateral (
         select r1.role_type
@@ -49,9 +69,23 @@ class IamController {
         limit 1
       ) scope on true
       left join region r on r.id = scope.scope_ref_id
+      left join farmer_wallet fw on fw.tenant_id = u.tenant_id and fw.user_id = u.id
       order by u.created_at asc
-    `);
-    return ok({ items: result.rows });
+      offset $1
+      limit $2
+    `, [offset, pageSize]);
+    const total = result.rows.length > 0 ? Number.parseInt(result.rows[0].total, 10) : 0;
+    return ok({
+      items: result.rows.map(({ total: _total, balance, locked_balance, points, ...row }) => ({
+        ...row,
+        balance: balance === null ? null : Number(balance),
+        locked_balance: locked_balance === null ? null : Number(locked_balance),
+        points: points === null ? null : Number(points),
+      })),
+      total,
+      page,
+      page_size: pageSize,
+    });
   }
 
   @Post('users')

@@ -585,6 +585,9 @@
 | alarm_event | work_order | 1:0..N |
 | ai_conversation | ai_message | 1:N |
 | ai_conversation | ai_handoff | 1:0..N |
+| investor_contact | investor_project_interest | 1:N |
+| investor_project_interest | investor_project_interest_event | 1:N |
+| project / project_block | investor_project_interest | 1:N |
 
 ## 11. 第一批迁移顺序建议
 
@@ -596,3 +599,102 @@
 6. `irrigation_order`, `alarm_event`, `work_order`, `work_order_action_log`, `uat_case`, `uat_execution`
 7. `ai_conversation`, `ai_message`, `channel_binding`, `conversation_context_snapshot`, `ai_handoff`
 8. `audit_log`, `operation_log`
+9. `investor_contact`, `investor_project_interest`, `investor_project_interest_event`, `investor_material_access_log`
+
+## 12. 投资者关系补充表
+
+### 12.1 `investor_contact`
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| id | uuid | pk |
+| tenant_id | uuid | idx |
+| source_channel | varchar(32) | idx |
+| source_session_key | varchar(128) | idx |
+| contact_name | varchar(64) | not null |
+| contact_phone | varchar(32) | idx |
+| organization_name | varchar(128) | idx |
+| position_title | varchar(64) |  |
+| city_name | varchar(64) | idx |
+| wechat_no | varchar(64) |  |
+| investor_type | varchar(24) | idx |
+| risk_preference | varchar(24) | idx |
+| status | varchar(24) | idx |
+| remarks | text |  |
+| profile_json | jsonb |  |
+| first_seen_at | timestamp | idx |
+| last_seen_at | timestamp | idx |
+
+### 12.2 `investor_project_interest`
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| id | uuid | pk |
+| tenant_id | uuid | idx |
+| contact_id | uuid | fk |
+| project_id | uuid | fk |
+| project_block_id | uuid | fk, null |
+| source_channel | varchar(32) | idx |
+| intent_type | varchar(24) | idx |
+| intent_amount | numeric(18,2) |  |
+| currency_code | varchar(8) |  |
+| planned_decision_window | varchar(32) | idx |
+| lifecycle_status | varchar(24) | idx |
+| followup_priority | int | idx |
+| advisor_owner | varchar(64) | idx |
+| last_followup_at | timestamp | idx |
+| next_followup_at | timestamp | idx |
+| latest_reason_code | varchar(64) | idx |
+| intent_note | text |  |
+| intake_snapshot_json | jsonb |  |
+| latest_progress_json | jsonb |  |
+
+索引建议：
+
+- `idx_investor_project_interest_contact (tenant_id, contact_id, created_at desc)`
+- `idx_investor_project_interest_project (tenant_id, project_id, lifecycle_status, created_at desc)`
+- `idx_investor_project_interest_next_followup (tenant_id, lifecycle_status, next_followup_at)`
+
+### 12.3 `investor_project_interest_event`
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| id | uuid | pk |
+| tenant_id | uuid | idx |
+| interest_id | uuid | fk |
+| from_status | varchar(24) | idx |
+| to_status | varchar(24) | idx |
+| action_code | varchar(32) | idx |
+| operator_type | varchar(16) | idx |
+| operator_ref | varchar(128) | idx |
+| reason_code | varchar(64) | idx |
+| event_note | text |  |
+| snapshot_json | jsonb |  |
+| occurred_at | timestamp | idx |
+
+说明：
+
+- 该表为不可变事件流，承担投资意向从提交到关闭/转线下的审计回放能力。
+- `operator_type` 建议固定为 `investor / advisor / ops / system`。
+
+### 12.4 `investor_material_access_log`
+
+| 字段 | 类型 | 约束 |
+| --- | --- | --- |
+| id | uuid | pk |
+| tenant_id | uuid | idx |
+| contact_id | uuid | fk, null |
+| interest_id | uuid | fk, null |
+| project_id | uuid | fk |
+| project_block_id | uuid | fk, null |
+| material_type | varchar(32) | idx |
+| material_key | varchar(128) | idx |
+| access_action | varchar(24) | idx |
+| access_source | varchar(32) | idx |
+| access_snapshot_json | jsonb |  |
+| occurred_at | timestamp | idx |
+
+说明：
+
+- 用于记录资料室浏览、下载、分享等动作，便于顾问判断兴趣热度和资料触达效果。
+- 该表只记录访问留痕，不承担资料本体存储。

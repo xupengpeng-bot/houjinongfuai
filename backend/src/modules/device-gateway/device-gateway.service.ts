@@ -6,6 +6,11 @@ import { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
 import { AppException } from '../../common/errors/app-exception';
 import { ErrorCodes } from '../../common/errors/error-codes';
+import {
+  isActiveRuntimeWorkflowState,
+  isPausedRuntimeWorkflowState,
+  normalizeRuntimeWorkflowState,
+} from '../../common/runtime-workflow-state';
 import { DeviceEnvelope } from '../protocol-adapter/device-envelope';
 import { DeviceRuntimeEvent } from '../protocol-adapter/device-runtime-event';
 import { TcpJsonV1Adapter } from '../protocol-adapter/tcp-json-v1.adapter';
@@ -16,6 +21,7 @@ import { SessionStatusLogRepository } from '../runtime/session-status-log.reposi
 import { RuntimeIngestService } from '../runtime-ingest/runtime-ingest.service';
 import { isNonReplayableRealtimeActionCode } from './device-command-dispatch-policy';
 import { buildScanControllerTrialSpec } from './scan-controller-trial.contract';
+import type { TcpJsonV1Server } from './tcp-json-v1.server';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const DEFAULT_MANAGER_ID = '00000000-0000-0000-0000-000000000102';
@@ -30,6 +36,8 @@ const SUPPORTED_PLATFORM_QUERY_CODES = new Set([
 const SUPPORTED_PLATFORM_ACTION_CODES = new Set([
   'start_pump',
   'stop_pump',
+  'open_relay',
+  'close_relay',
   'open_valve',
   'close_valve',
   'pause_session',
@@ -53,6 +61,7 @@ type ResolvedDevice = {
   projectId: string | null;
   blockId: string | null;
   sourceNodeCode: string | null;
+  controlConfig: Record<string, unknown> | null;
 };
 
 type ResolvedSession = {
@@ -135,6 +144,31 @@ type DeviceCommandQueueRow = {
   responsePayload: Record<string, unknown>;
 };
 
+type ResolvedUpgradeJobItem = {
+  id: string;
+  jobId: string;
+  imei: string;
+  commandId: string | null;
+  status: string;
+  stage: string;
+  progressPercent: number | null;
+  lastErrorCode: string | null;
+  lastErrorMessage: string | null;
+  detailJson: Record<string, unknown>;
+};
+
+type UpgradeEventReport = {
+  eventCode: string;
+  upgradeToken: string;
+  stage: string;
+  result: string | null;
+  progressPercent: number | null;
+  reasonCode: string | null;
+  message: string | null;
+  firmwareVersion: string | null;
+  checksum: string | null;
+};
+
 type DeviceConnectionHealthRow = {
   id: string;
   imei: string;
@@ -176,6 +210,31 @@ type DeviceGatewayCommandRecord = {
   deviceName: string | null;
 };
 
+type PumpStrategyKind = 'meter_breaker_modbus' | 'single_relay_follow' | 'dual_relay_pulse';
+
+type PumpControlBinding = {
+  command: string | null;
+  target: string | null;
+  moduleCode: string | null;
+  pulseMs: number | null;
+};
+
+type RoutedExecuteActionStep = {
+  actionCode: string;
+  moduleCode: string | null;
+  targetRef: string | null;
+  payload: Record<string, unknown>;
+  delayMs?: number;
+};
+
+type RoutedExecuteActionPlan = {
+  strategyKind: PumpStrategyKind | null;
+  routingMode: 'firmware_native' | 'control_config_direct' | 'control_config_pulse' | 'control_config_fallback';
+  fallbackReason: string | null;
+  logicalActionCode: string;
+  steps: RoutedExecuteActionStep[];
+};
+
 type TcpAuditLogRecord = {
   id: string;
   transportType: string;
@@ -192,6 +251,36 @@ type TcpAuditLogRecord = {
   ingestError: string | null;
   rawFrameText: string;
   requestSnapshot: Record<string, unknown>;
+  createdAt: string;
+  updatedAt: string;
+};
+
+type DeviceCardAuditLogRecord = {
+  id: string;
+  deviceId: string | null;
+  deviceCode: string | null;
+  deviceName: string | null;
+  messageLogId: string | null;
+  tcpAuditLogId: string | null;
+  imei: string;
+  msgId: string | null;
+  seqNo: number | null;
+  msgType: string;
+  eventType: string | null;
+  eventCode: string | null;
+  reasonCode: string | null;
+  auditOutcome: string | null;
+  auditSource: string | null;
+  swipeAction: string | null;
+  swipeEventId: string | null;
+  targetRef: string | null;
+  cardToken: string | null;
+  cardTokenSuffix: string | null;
+  occurredAt: string | null;
+  serverRxTs: string;
+  idempotencyKey: string;
+  rawMessage: string | null;
+  payload: Record<string, unknown>;
   createdAt: string;
   updatedAt: string;
 };
@@ -258,6 +347,7 @@ type DispatchQueryInput = {
   imei?: string | null;
   session_id?: string | null;
   session_ref?: string | null;
+  qc?: string | null;
   query_code?: string | null;
   scope?: string | null;
   module_code?: string | null;
@@ -274,6 +364,7 @@ type DispatchExecuteActionInput = {
   session_id?: string | null;
   session_ref?: string | null;
   order_id?: string | null;
+  ac?: string | null;
   action_code?: string | null;
   scope?: string | null;
   module_code?: string | null;
@@ -292,6 +383,7 @@ type DispatchSyncConfigInput = {
   config_version?: number | null;
   firmware_family?: string | null;
   feature_modules?: string[] | null;
+  control_config?: Record<string, unknown> | null;
   channel_bindings?: unknown[] | null;
   runtime_rules?: Record<string, unknown> | null;
   resource_inventory?: Record<string, unknown> | null;
@@ -311,6 +403,7 @@ type CardSwipeBridgeResult = {
   errorCode: string | null;
   errorMessage: string | null;
   queuedCommandCount: number;
+  queuedCommandTokens: string[];
   responseSnapshot: Record<string, unknown>;
 };
 
@@ -329,6 +422,7 @@ export class DeviceGatewayService {
     'integrity'
   ]);
   private runtimeCheckoutService: RuntimeCheckoutService | null = null;
+  private tcpJsonV1Server: TcpJsonV1Server | null | undefined;
 
   constructor(
     private readonly db: DatabaseService,
@@ -398,6 +492,8 @@ export class DeviceGatewayService {
     if (normalized === 'QS') return 'QUERY_RESULT';
     if (normalized === 'EX') return 'EXECUTE_ACTION';
     if (normalized === 'SC') return 'SYNC_CONFIG';
+    if (normalized === 'RA') return 'REGISTER_ACK';
+    if (normalized === 'RN') return 'REGISTER_NACK';
     if (normalized === 'AK') return 'COMMAND_ACK';
     if (normalized === 'NK') return 'COMMAND_NACK';
     return normalized;
@@ -413,6 +509,8 @@ export class DeviceGatewayService {
     if (normalized === 'QUERY_RESULT') return 'QS';
     if (normalized === 'EXECUTE_ACTION') return 'EX';
     if (normalized === 'SYNC_CONFIG') return 'SC';
+    if (normalized === 'REGISTER_ACK') return 'RA';
+    if (normalized === 'REGISTER_NACK') return 'RN';
     if (normalized === 'COMMAND_ACK') return 'AK';
     if (normalized === 'COMMAND_NACK') return 'NK';
     return normalized;
@@ -431,7 +529,9 @@ export class DeviceGatewayService {
     if (!normalized) return '';
     if (normalized === 'pump_vfd_control') return 'pvc';
     if (normalized === 'pump_direct_control') return 'pdc';
+    if (normalized === 'relay_output_control') return 'rly';
     if (normalized === 'single_valve_control') return 'svl';
+    if (normalized === 'dual_valve_control') return 'dvl';
     if (normalized === 'electric_meter_modbus') return 'ebr';
     if (normalized === 'breaker_control') return 'bkr';
     if (normalized === 'breaker_feedback_monitor') return 'bkf';
@@ -443,6 +543,8 @@ export class DeviceGatewayService {
     if (normalized === 'payment_qr_control') return 'pay';
     if (normalized === 'card_auth_reader') return 'cdr';
     if (normalized === 'valve_feedback_monitor') return 'vfb';
+    if (normalized === 'rs485_sensor_gateway') return 'rsg';
+    if (normalized === 'rs485_vfd_gateway') return 'rvg';
     return normalized;
   }
 
@@ -466,6 +568,8 @@ export class DeviceGatewayService {
     if (normalized === 'resume_session') return 'res';
     if (normalized === 'start_pump') return 'spu';
     if (normalized === 'stop_pump') return 'tpu';
+    if (normalized === 'open_relay') return 'orl';
+    if (normalized === 'close_relay') return 'crl';
     if (normalized === 'open_valve') return 'ovl';
     if (normalized === 'close_valve') return 'cvl';
     return normalized;
@@ -507,22 +611,189 @@ export class DeviceGatewayService {
     return this.runtimeCheckoutService;
   }
 
+  private getTcpJsonV1Server() {
+    if (this.tcpJsonV1Server === undefined) {
+      const token =
+        require('./tcp-json-v1.server') as typeof import('./tcp-json-v1.server');
+      this.tcpJsonV1Server = this.moduleRef.get(token.TcpJsonV1Server, { strict: false });
+    }
+    return this.tcpJsonV1Server ?? null;
+  }
+
+  private extractQueuedCommandTokens(value: unknown) {
+    if (!Array.isArray(value)) return [];
+    return value
+      .map((item) => this.asString(this.asObject(item).command_token ?? this.asObject(item).commandToken))
+      .filter((item) => Boolean(item));
+  }
+
+  private extractQueuedCommandToken(value: unknown) {
+    return this.asString(this.asObject(this.asObject(value).command).command_token);
+  }
+
+  private async dispatchQueuedCommandTokensNow(commandTokens: string[]) {
+    const uniqueTokens = Array.from(new Set(commandTokens.map((item) => this.asString(item)).filter((item) => Boolean(item))));
+    if (uniqueTokens.length === 0) {
+      return [];
+    }
+
+    const tcpServer = this.getTcpJsonV1Server();
+    if (!tcpServer) {
+      return uniqueTokens.map((commandToken) => ({
+        command_token: commandToken,
+        attempted: false,
+        delivered: false,
+        mode: 'queued',
+        reason: 'tcp_server_unavailable'
+      }));
+    }
+
+    const deliveries = [];
+    for (const commandToken of uniqueTokens) {
+      const delivery = await tcpServer.dispatchQueuedCommandNow(commandToken);
+      deliveries.push({
+        command_token: commandToken,
+        ...delivery
+      });
+    }
+    return deliveries;
+  }
+
   private extractEventCode(event: DeviceRuntimeEvent) {
     return this.asString(event.payload.event_code ?? event.payload.eventCode).toLowerCase();
   }
 
-  private isCardSwipeRequestedEvent(event: DeviceRuntimeEvent) {
-    return event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED' || this.extractEventCode(event) === 'card_swipe_requested';
+  private extractCardReasonCode(event: DeviceRuntimeEvent) {
+    return this.asString(
+      event.payload.reason_code ??
+        event.payload.reasonCode ??
+        event.payload.reject_code ??
+        event.payload.rejectCode ??
+        event.payload.error_code ??
+        event.payload.errorCode
+    ).toLowerCase();
   }
 
-  private isCardSwipeMetadataEvent(event: DeviceRuntimeEvent) {
+  private extractCardTargetRef(event: DeviceRuntimeEvent) {
+    return this.asString(event.payload.target_ref ?? event.payload.targetRef ?? event.payload.tr).toLowerCase();
+  }
+
+  private parseCardAuditMessage(rawMessage: string | null | undefined) {
+    const normalized = this.asString(rawMessage);
+    if (!normalized) {
+      return {
+        outcome: null,
+        source: null,
+        tokenSuffix: null
+      };
+    }
+
+    const [outcome, source, tokenSuffix] = normalized.split('|', 3).map((item) => this.asString(item) || null);
+    return {
+      outcome: outcome ? outcome.toLowerCase() : null,
+      source,
+      tokenSuffix
+    };
+  }
+
+  private isAcceptedPlatformCheckoutCardAudit(event: DeviceRuntimeEvent) {
+    if (this.extractEventCode(event) !== 'cse') {
+      return false;
+    }
+
+    const reasonCode = this.extractCardReasonCode(event);
+    const payload = this.asObject(event.payload);
+    const parsedMessage = this.parseCardAuditMessage(this.asString(payload.message ?? payload.msg) || null);
+    const auditOutcome =
+      parsedMessage.outcome ||
+      this.asString(payload.result ?? payload.status ?? payload.command_status ?? payload.commandStatus).toLowerCase() ||
+      null;
+
+    return reasonCode === 'platform_checkout' && auditOutcome === 'accepted';
+  }
+
+  private isCardAuditEvent(event: DeviceRuntimeEvent) {
     const eventCode = this.extractEventCode(event);
+    const targetRef = this.extractCardTargetRef(event);
     return (
       event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED' ||
       event.eventType === 'DEVICE_CARD_SWIPE_REJECTED' ||
       eventCode === 'card_swipe_requested' ||
-      eventCode === 'card_swipe_rejected'
+      eventCode === 'card_swipe_rejected' ||
+      eventCode === 'cse' ||
+      targetRef === 'card'
     );
+  }
+
+  private isCardSwipeRequestedEvent(event: DeviceRuntimeEvent) {
+    return (
+      event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED' ||
+      this.extractEventCode(event) === 'card_swipe_requested' ||
+      this.isAcceptedPlatformCheckoutCardAudit(event)
+    );
+  }
+
+  private isCardSwipeMetadataEvent(event: DeviceRuntimeEvent) {
+    return this.isCardAuditEvent(event);
+  }
+
+  private buildCardAuditLogPayload(event: DeviceRuntimeEvent) {
+    if (!this.isCardAuditEvent(event)) {
+      return null;
+    }
+
+    const payload = this.asObject(event.payload);
+    const rawMessage = this.asString(payload.message ?? payload.msg) || null;
+    const parsedMessage = this.parseCardAuditMessage(rawMessage);
+    const eventCode = this.extractEventCode(event) || null;
+    const reasonCode = this.extractCardReasonCode(event) || null;
+    const cardToken =
+      this.asString(payload.card_token ?? payload.cardToken ?? payload.access_token ?? payload.accessToken) || null;
+    const tokenSuffix = parsedMessage.tokenSuffix ?? this.extractTokenSuffix(cardToken);
+    const swipeAction = this.asString(payload.swipe_action ?? payload.swipeAction).toLowerCase() || null;
+    const swipeEventId =
+      this.asString(
+        payload.swipe_event_id ??
+          payload.swipeEventId ??
+          payload.request_msg_id ??
+          payload.requestMsgId ??
+          payload.correlation_id ??
+          payload.correlationId
+      ) ||
+      this.asString(event.msgId) ||
+      null;
+    const explicitOutcome =
+      this.asString(payload.result ?? payload.status ?? payload.command_status ?? payload.commandStatus).toLowerCase() ||
+      null;
+    const auditOutcome =
+      parsedMessage.outcome ??
+      explicitOutcome ??
+      (event.eventType === 'DEVICE_CARD_SWIPE_REQUESTED'
+        ? 'requested'
+        : event.eventType === 'DEVICE_CARD_SWIPE_REJECTED'
+          ? 'rejected'
+          : null);
+
+    return {
+      msgId: this.asString(event.msgId) || null,
+      seqNo: event.seqNo ?? null,
+      msgType: this.asString(event.msgType) || 'EVENT_REPORT',
+      eventType: this.asString(event.eventType) || null,
+      eventCode,
+      reasonCode,
+      auditOutcome,
+      auditSource: parsedMessage.source,
+      swipeAction,
+      swipeEventId,
+      targetRef: this.extractCardTargetRef(event) || null,
+      cardToken,
+      cardTokenSuffix: tokenSuffix,
+      occurredAt: this.toIsoTimestamp(event.deviceTs ?? event.serverRxTs),
+      serverRxTs: this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
+      idempotencyKey: event.idempotencyKey,
+      rawMessage,
+      payload
+    };
   }
 
   private normalizeQueuedCommandCount(response: Record<string, unknown>) {
@@ -581,10 +852,13 @@ export class DeviceGatewayService {
         request_payload: {
           scope: 'common',
           action_code: 'play_voice_prompt',
-          prompt_code: promptCode,
-          prompt_source: 'platform_card_checkout',
-          clear_queue: true,
-          min_gap_ms: 300
+          params: {
+            pc: promptCode,
+            prompt_code: promptCode,
+            prompt_source: 'platform_card_checkout',
+            clear_queue: true,
+            min_gap_ms: 300
+          }
         },
         source: 'device_gateway.card_swipe_feedback'
       },
@@ -603,6 +877,97 @@ export class DeviceGatewayService {
       return 'accepted';
     }
     return 'platform_processing';
+  }
+
+  private async insertCardAuditLogInClient(input: {
+    deviceId?: string | null;
+    messageLogId?: string | null;
+    tcpAuditLogId?: string | null;
+    event: DeviceRuntimeEvent;
+    client: PoolClient;
+  }) {
+    const audit = this.buildCardAuditLogPayload(input.event);
+    if (!audit) {
+      return null;
+    }
+
+    const tcpAuditLogId = this.looksLikeUuid(input.tcpAuditLogId) ? input.tcpAuditLogId : null;
+    const effectiveIdempotencyKey = tcpAuditLogId ? `tcp_audit:${tcpAuditLogId}` : audit.idempotencyKey;
+
+    const result = await this.db.query<{ id: string }>(
+      `
+      insert into device_card_audit_log (
+        id, tenant_id, device_id, message_log_id, tcp_audit_log_id, imei,
+        msg_id, seq_no, msg_type, event_type, event_code, reason_code,
+        audit_outcome, audit_source, swipe_action, swipe_event_id, target_ref,
+        card_token, card_token_suffix, occurred_at, server_rx_ts,
+        idempotency_key, raw_message, payload_json
+      )
+      values (
+        $1::uuid, $2, $3::uuid, $4::uuid, $5::uuid, $6,
+        $7, $8, $9, $10, $11, $12,
+        $13, $14, $15, $16, $17,
+        $18, $19, $20::timestamptz, $21::timestamptz,
+        $22, $23, $24::jsonb
+      )
+      on conflict (tenant_id, idempotency_key) do update
+      set device_id = coalesce(device_card_audit_log.device_id, excluded.device_id),
+          message_log_id = coalesce(device_card_audit_log.message_log_id, excluded.message_log_id),
+          tcp_audit_log_id = coalesce(device_card_audit_log.tcp_audit_log_id, excluded.tcp_audit_log_id),
+          msg_id = coalesce(device_card_audit_log.msg_id, excluded.msg_id),
+          seq_no = coalesce(device_card_audit_log.seq_no, excluded.seq_no),
+          event_type = coalesce(device_card_audit_log.event_type, excluded.event_type),
+          event_code = coalesce(device_card_audit_log.event_code, excluded.event_code),
+          reason_code = coalesce(device_card_audit_log.reason_code, excluded.reason_code),
+          audit_outcome = coalesce(device_card_audit_log.audit_outcome, excluded.audit_outcome),
+          audit_source = coalesce(device_card_audit_log.audit_source, excluded.audit_source),
+          swipe_action = coalesce(device_card_audit_log.swipe_action, excluded.swipe_action),
+          swipe_event_id = coalesce(device_card_audit_log.swipe_event_id, excluded.swipe_event_id),
+          target_ref = coalesce(device_card_audit_log.target_ref, excluded.target_ref),
+          card_token = coalesce(device_card_audit_log.card_token, excluded.card_token),
+          card_token_suffix = coalesce(device_card_audit_log.card_token_suffix, excluded.card_token_suffix),
+          occurred_at = coalesce(device_card_audit_log.occurred_at, excluded.occurred_at),
+          server_rx_ts = coalesce(device_card_audit_log.server_rx_ts, excluded.server_rx_ts),
+          raw_message = coalesce(device_card_audit_log.raw_message, excluded.raw_message),
+          payload_json = coalesce(device_card_audit_log.payload_json, '{}'::jsonb) || excluded.payload_json,
+          updated_at = now()
+      returning id::text as id
+      `,
+      [
+        randomUUID(),
+        TENANT_ID,
+        input.deviceId ?? null,
+        this.looksLikeUuid(input.messageLogId) ? input.messageLogId : null,
+        tcpAuditLogId,
+        input.event.imei,
+        audit.msgId,
+        audit.seqNo,
+        audit.msgType,
+        audit.eventType,
+        audit.eventCode,
+        audit.reasonCode,
+        audit.auditOutcome,
+        audit.auditSource,
+        audit.swipeAction,
+        audit.swipeEventId,
+        audit.targetRef,
+        audit.cardToken,
+        audit.cardTokenSuffix,
+        audit.occurredAt,
+        audit.serverRxTs,
+        effectiveIdempotencyKey,
+        audit.rawMessage,
+        JSON.stringify(audit.payload)
+      ],
+      input.client
+    );
+
+    return {
+      id: result.rows[0]?.id ?? null,
+      eventCode: audit.eventCode,
+      auditOutcome: audit.auditOutcome,
+      cardTokenSuffix: audit.cardTokenSuffix
+    };
   }
 
   private async upsertCardSwipeJournal(input: {
@@ -670,11 +1035,8 @@ export class DeviceGatewayService {
 
   private async bridgeCardSwipeRequestedEvent(event: DeviceRuntimeEvent, client: PoolClient): Promise<CardSwipeBridgeResult> {
     const payload = this.asObject(event.payload);
-    const cardToken =
-      this.asString(payload.card_token) ||
-      this.asString(payload.cardToken) ||
-      this.asString(payload.access_token) ||
-      this.asString(payload.accessToken);
+    const cardTokenResolution = await this.resolveCardSwipeCardToken(payload, client);
+    const cardToken = cardTokenResolution.cardToken;
     const swipeAction = this.asString(payload.swipe_action ?? payload.swipeAction).toLowerCase();
     const normalizedSwipeAction = swipeAction === 'start' || swipeAction === 'stop' ? swipeAction : null;
     const swipeEventId = this.asString(payload.swipe_event_id ?? payload.swipeEventId) || event.msgId;
@@ -687,7 +1049,11 @@ export class DeviceGatewayService {
       gateway_event_type: event.eventType,
       gateway_msg_id: event.msgId,
       gateway_seq_no: event.seqNo,
-      gateway_payload: payload
+      gateway_payload: payload,
+      card_token_resolution: {
+        source: cardTokenResolution.source,
+        card_token_suffix: cardTokenResolution.cardTokenSuffix
+      }
     };
 
     await this.upsertCardSwipeJournal({
@@ -703,12 +1069,15 @@ export class DeviceGatewayService {
     });
 
     if (!cardToken) {
-      const queuedPromptCount = (await this.queueSwipeFeedbackPrompt(event.imei, 'invalid_card', client).then(() => 1).catch(() => 0));
+      const queuedPrompt = await this.queueSwipeFeedbackPrompt(event.imei, 'invalid_card', client).catch(() => null);
+      const queuedPromptToken = this.extractQueuedCommandToken(queuedPrompt);
+      const queuedPromptCount = queuedPromptToken ? 1 : 0;
       const responseSnapshot = {
         error_code: ErrorCodes.VALIDATION_ERROR,
-        error_message: 'card_token is missing from device swipe event',
+        error_message: cardTokenResolution.errorMessage || 'card_token is missing from device swipe event',
         prompt_code: 'invalid_card',
-        queued_command_count: queuedPromptCount
+        queued_command_count: queuedPromptCount,
+        card_token_suffix: cardTokenResolution.cardTokenSuffix
       };
       await this.upsertCardSwipeJournal({
         imei: event.imei,
@@ -719,7 +1088,7 @@ export class DeviceGatewayService {
         responseSnapshot,
         resultCategory: 'platform_explicit_reject',
         resultCode: ErrorCodes.VALIDATION_ERROR,
-        resultMessage: 'card_token is missing from device swipe event',
+        resultMessage: cardTokenResolution.errorMessage || 'card_token is missing from device swipe event',
         awaitingDeviceAck: false,
         resolvedAt: swipeAt,
         client
@@ -734,8 +1103,9 @@ export class DeviceGatewayService {
         awaitingDeviceAck: false,
         promptCode: 'invalid_card',
         errorCode: ErrorCodes.VALIDATION_ERROR,
-        errorMessage: 'card_token is missing from device swipe event',
+        errorMessage: cardTokenResolution.errorMessage || 'card_token is missing from device swipe event',
         queuedCommandCount: queuedPromptCount,
+        queuedCommandTokens: queuedPromptToken ? [queuedPromptToken] : [],
         responseSnapshot
       };
     }
@@ -758,11 +1128,14 @@ export class DeviceGatewayService {
         errorCode: null,
         errorMessage: null,
         queuedCommandCount: this.normalizeQueuedCommandCount(response),
+        queuedCommandTokens: this.extractQueuedCommandTokens(response.queued_commands),
         responseSnapshot: response
       };
     } catch (error) {
       const promptCode = this.mapCardSwipeFailurePrompt(error);
-      const queuedPromptCount = (await this.queueSwipeFeedbackPrompt(event.imei, promptCode, client).then(() => 1).catch(() => 0));
+      const queuedPrompt = await this.queueSwipeFeedbackPrompt(event.imei, promptCode, client).catch(() => null);
+      const queuedPromptToken = this.extractQueuedCommandToken(queuedPrompt);
+      const queuedPromptCount = queuedPromptToken ? 1 : 0;
 
       if (error instanceof AppException) {
         const payload = error.getResponse() as {
@@ -804,6 +1177,7 @@ export class DeviceGatewayService {
           errorCode: this.asString(payload?.code) || ErrorCodes.INTERNAL_ERROR,
           errorMessage: this.asString(payload?.message) || 'card swipe checkout failed',
           queuedCommandCount: queuedPromptCount,
+          queuedCommandTokens: queuedPromptToken ? [queuedPromptToken] : [],
           responseSnapshot
         };
       }
@@ -842,9 +1216,94 @@ export class DeviceGatewayService {
         errorCode: ErrorCodes.INTERNAL_ERROR,
         errorMessage: 'card swipe checkout failed',
         queuedCommandCount: queuedPromptCount,
+        queuedCommandTokens: queuedPromptToken ? [queuedPromptToken] : [],
         responseSnapshot
       };
     }
+  }
+
+  private extractCardTokenFromPayload(payload: Record<string, unknown>) {
+    return (
+      this.asString(payload.card_token) ||
+      this.asString(payload.cardToken) ||
+      this.asString(payload.access_token) ||
+      this.asString(payload.accessToken) ||
+      null
+    );
+  }
+
+  private extractCardTokenSuffixFromPayload(payload: Record<string, unknown>) {
+    const explicitSuffix = this.asString(payload.card_token_suffix ?? payload.cardTokenSuffix);
+    if (explicitSuffix) {
+      return this.extractTokenSuffix(explicitSuffix, explicitSuffix.length);
+    }
+
+    const parsedMessage = this.parseCardAuditMessage(this.asString(payload.message ?? payload.msg) || null);
+    return parsedMessage.tokenSuffix ? this.extractTokenSuffix(parsedMessage.tokenSuffix, parsedMessage.tokenSuffix.length) : null;
+  }
+
+  private async resolveCardSwipeCardToken(
+    payload: Record<string, unknown>,
+    client: PoolClient
+  ): Promise<{ cardToken: string | null; cardTokenSuffix: string | null; source: string; errorMessage: string | null }> {
+    const explicitCardToken = this.extractCardTokenFromPayload(payload);
+    if (explicitCardToken) {
+      return {
+        cardToken: explicitCardToken,
+        cardTokenSuffix: this.extractTokenSuffix(explicitCardToken),
+        source: 'payload',
+        errorMessage: null
+      };
+    }
+
+    const cardTokenSuffix = this.extractCardTokenSuffixFromPayload(payload);
+    if (!cardTokenSuffix) {
+      return {
+        cardToken: null,
+        cardTokenSuffix: null,
+        source: 'missing',
+        errorMessage: 'card_token is missing from device swipe event'
+      };
+    }
+
+    const result = await this.db.query<{ cardToken: string }>(
+      `
+      select card_token as "cardToken"
+      from farmer_card
+      where tenant_id = $1
+        and status = 'active'
+        and right(card_token, char_length($2)) = $2
+      order by created_at desc
+      limit 2
+      `,
+      [TENANT_ID, cardTokenSuffix],
+      client
+    );
+
+    if (result.rows.length === 1) {
+      return {
+        cardToken: this.asString(result.rows[0]?.cardToken) || null,
+        cardTokenSuffix,
+        source: 'active_card_suffix',
+        errorMessage: null
+      };
+    }
+
+    if (result.rows.length > 1) {
+      return {
+        cardToken: null,
+        cardTokenSuffix,
+        source: 'ambiguous_suffix',
+        errorMessage: 'card_token suffix matched multiple active cards'
+      };
+    }
+
+    return {
+      cardToken: null,
+      cardTokenSuffix,
+      source: 'unresolved_suffix',
+      errorMessage: 'card_token suffix could not resolve an active card'
+    };
   }
 
   private classifyDeviceCardSwipeOutcome(event: DeviceRuntimeEvent) {
@@ -955,6 +1414,13 @@ export class DeviceGatewayService {
     return Number.isNaN(date.getTime()) ? null : date.toISOString();
   }
 
+  private extractTokenSuffix(value: string | null | undefined, length = 6) {
+    const normalized = this.asString(value);
+    if (!normalized) return null;
+    const safeLength = Math.min(Math.max(Math.trunc(length), 1), normalized.length);
+    return normalized.slice(-safeLength) || null;
+  }
+
   private normalizeBridgeId(value: unknown) {
     const normalized = this.asString(value).toLowerCase().replace(/[^a-z0-9:_-]+/g, '-');
     return normalized || 'default';
@@ -974,6 +1440,12 @@ export class DeviceGatewayService {
     const raw = Number(this.configService.get<string>('DEVICE_GATEWAY_SENT_TIMEOUT_SECONDS') || 30);
     if (!Number.isFinite(raw)) return 30;
     return Math.min(Math.max(Math.trunc(raw), 5), 3600);
+  }
+
+  private getUpgradeAckTimeoutSeconds() {
+    const raw = Number(this.configService.get<string>('DEVICE_GATEWAY_UPGRADE_ACK_TIMEOUT_SECONDS') || 600);
+    if (!Number.isFinite(raw)) return 600;
+    return Math.min(Math.max(Math.trunc(raw), 300), 7200);
   }
 
   private getRetryBaseDelaySeconds() {
@@ -998,6 +1470,14 @@ export class DeviceGatewayService {
     const raw = Number(this.configService.get<string>('DEVICE_GATEWAY_DISCONNECT_GRACE_SECONDS') || 30);
     if (!Number.isFinite(raw)) return 30;
     return Math.min(Math.max(Math.trunc(raw), 5), 3600);
+  }
+
+  private getLargeCommandStabilizationSeconds() {
+    const raw = Number(
+      this.configService.get<string>('DEVICE_GATEWAY_LARGE_COMMAND_STABILIZATION_SECONDS') || 10
+    );
+    if (!Number.isFinite(raw)) return 10;
+    return Math.min(Math.max(Math.trunc(raw), 0), 300);
   }
 
   private computeRetryDelaySeconds(retryCount: number) {
@@ -1039,8 +1519,8 @@ export class DeviceGatewayService {
     ) {
       return 'query_electric_meter';
     }
-    if (normalized === 'query_upgrade_status') return 'query_upgrade_status';
-    if (normalized === 'query_upgrade_capability') return 'query_upgrade_capability';
+    if (normalized === 'qgs' || normalized === 'query_upgrade_status') return 'query_upgrade_status';
+    if (normalized === 'qgc' || normalized === 'query_upgrade_capability') return 'query_upgrade_capability';
     return normalized;
   }
 
@@ -1058,6 +1538,8 @@ export class DeviceGatewayService {
     if (normalized === 'res' || normalized === 'resume_session') return 'resume_session';
     if (normalized === 'spu' || normalized === 'start_pump') return 'start_pump';
     if (normalized === 'tpu' || normalized === 'stop_pump') return 'stop_pump';
+    if (normalized === 'orl' || normalized === 'open_relay') return 'open_relay';
+    if (normalized === 'crl' || normalized === 'close_relay') return 'close_relay';
     if (normalized === 'ovl' || normalized === 'open_valve') return 'open_valve';
     if (normalized === 'cvl' || normalized === 'close_valve') return 'close_valve';
     return normalized;
@@ -1125,14 +1607,18 @@ export class DeviceGatewayService {
     ) {
       return 'common';
     }
-    if (['start_pump', 'stop_pump', 'open_valve', 'close_valve'].includes(actionCode)) return 'module';
+    if (['start_pump', 'stop_pump', 'open_relay', 'close_relay', 'open_valve', 'close_valve'].includes(actionCode)) {
+      return 'module';
+    }
     return this.normalizeScope(requestedScope);
   }
 
   private resolveActionModuleCode(actionCode: string, requestedModuleCode: unknown) {
-    if (actionCode === 'start_pump' || actionCode === 'stop_pump') return 'pump_direct_control';
-    if (actionCode === 'open_valve' || actionCode === 'close_valve') return 'single_valve_control';
     const normalized = this.asString(requestedModuleCode);
+    if (normalized) return normalized;
+    if (actionCode === 'start_pump' || actionCode === 'stop_pump') return 'pump_direct_control';
+    if (actionCode === 'open_relay' || actionCode === 'close_relay') return 'relay_output_control';
+    if (actionCode === 'open_valve' || actionCode === 'close_valve') return 'single_valve_control';
     return normalized || null;
   }
 
@@ -1145,8 +1631,206 @@ export class DeviceGatewayService {
       return explicitTargetRef;
     }
     if (actionCode === 'start_pump' || actionCode === 'stop_pump') return 'pump_1';
+    if (actionCode === 'open_relay' || actionCode === 'close_relay') return 'relay_1';
     if (actionCode === 'open_valve' || actionCode === 'close_valve') return 'valve_1';
     return null;
+  }
+
+  private normalizePumpStrategyKind(value: unknown): PumpStrategyKind | null {
+    const normalized = this.asString(value).toLowerCase();
+    if (normalized === 'meter_breaker_modbus') return 'meter_breaker_modbus';
+    if (normalized === 'single_relay_follow') return 'single_relay_follow';
+    if (normalized === 'dual_relay_pulse') return 'dual_relay_pulse';
+    return null;
+  }
+
+  private inferPumpStrategyKind(controlConfig: Record<string, unknown> | null | undefined): PumpStrategyKind | null {
+    const config = this.asObject(controlConfig);
+    if (!config) return null;
+    const explicit = this.normalizePumpStrategyKind(config.pump_strategy_kind);
+    if (explicit) {
+      return explicit;
+    }
+    const pumpControlMode = this.asString(config.pump_control_mode).toLowerCase();
+    if (pumpControlMode === 'meter_breaker_485') {
+      return 'meter_breaker_modbus';
+    }
+    const startBinding = this.asObject(config.start_binding);
+    const stopBinding = this.asObject(config.stop_binding);
+    const startCommand = this.asString(startBinding?.command).toLowerCase();
+    const stopCommand = this.asString(stopBinding?.command).toLowerCase();
+    const startTarget = this.asString(startBinding?.target).toLowerCase();
+    const stopTarget = this.asString(stopBinding?.target).toLowerCase();
+    if (
+      startCommand === 'pulse' ||
+      stopCommand === 'pulse' ||
+      (startTarget && stopTarget && startTarget !== stopTarget)
+    ) {
+      return 'dual_relay_pulse';
+    }
+    if (startBinding || stopBinding) {
+      return 'single_relay_follow';
+    }
+    return null;
+  }
+
+  private parsePumpControlBinding(value: unknown): PumpControlBinding {
+    const binding = this.asObject(value);
+    const pulseMs = this.asNumber(binding?.pulse_ms ?? binding?.pulseMs);
+    return {
+      command: this.asString(binding?.command) || null,
+      target: this.asString(binding?.target) || null,
+      moduleCode: this.asString(binding?.module_code ?? binding?.moduleCode) || null,
+      pulseMs: pulseMs !== null && pulseMs > 0 ? Math.trunc(pulseMs) : null,
+    };
+  }
+
+  private buildRoutedPumpExecutePlan(args: {
+    actionCode: 'start_pump' | 'stop_pump';
+    payload: Record<string, unknown>;
+    requestedModuleCode: unknown;
+    channelCode?: unknown;
+    device: ResolvedDevice;
+  }): RoutedExecuteActionPlan {
+    const strategyKind = this.inferPumpStrategyKind(args.device.controlConfig);
+    const controlConfig = this.asObject(args.device.controlConfig);
+    const logicalTarget = this.asString(controlConfig?.logical_target) || 'pump_1';
+    const startBinding = this.parsePumpControlBinding(controlConfig?.start_binding);
+    const stopBinding = this.parsePumpControlBinding(controlConfig?.stop_binding);
+    const selectedBinding = args.actionCode === 'start_pump' ? startBinding : stopBinding;
+    const fallbackTarget = this.resolveActionTargetRef(args.actionCode, args.payload, args.channelCode);
+    const fallbackStep: RoutedExecuteActionStep = {
+      actionCode: args.actionCode,
+      moduleCode: this.resolveActionModuleCode(args.actionCode, args.requestedModuleCode),
+      targetRef: fallbackTarget,
+      payload: {
+        ...args.payload,
+        logical_action_code: args.actionCode,
+        logical_target_ref: logicalTarget,
+        routed_by_control_config: false,
+      },
+    };
+
+    if (!strategyKind) {
+      return {
+        strategyKind: null,
+        routingMode: 'firmware_native',
+        fallbackReason: null,
+        logicalActionCode: args.actionCode,
+        steps: [fallbackStep],
+      };
+    }
+
+    const routedPayloadBase = {
+      ...args.payload,
+      logical_action_code: args.actionCode,
+      logical_target_ref: logicalTarget,
+      routed_by_control_config: true,
+      control_strategy_kind: strategyKind,
+    };
+
+    if (strategyKind === 'dual_relay_pulse') {
+      const relayTarget = selectedBinding.target;
+      if (!relayTarget) {
+        return {
+          strategyKind,
+          routingMode: 'control_config_fallback',
+          fallbackReason: 'dual_relay_pulse missing relay binding target',
+          logicalActionCode: args.actionCode,
+          steps: [fallbackStep],
+        };
+      }
+      const pulseMs = selectedBinding.pulseMs ?? 300;
+      return {
+        strategyKind,
+        routingMode: 'control_config_pulse',
+        fallbackReason: null,
+        logicalActionCode: args.actionCode,
+        steps: [
+          {
+            actionCode: 'open_relay',
+            moduleCode: selectedBinding.moduleCode || this.resolveActionModuleCode('open_relay', null),
+            targetRef: relayTarget,
+            payload: {
+              ...routedPayloadBase,
+              routed_binding_target: relayTarget,
+              routed_binding_command: 'pulse',
+            },
+          },
+          {
+            actionCode: 'close_relay',
+            moduleCode: selectedBinding.moduleCode || this.resolveActionModuleCode('close_relay', null),
+            targetRef: relayTarget,
+            payload: {
+              ...routedPayloadBase,
+              routed_binding_target: relayTarget,
+              routed_binding_command: 'pulse_reset',
+            },
+            delayMs: pulseMs,
+          },
+        ],
+      };
+    }
+
+    if (strategyKind === 'single_relay_follow') {
+      const bindingCommand = this.normalizeSupportedActionCode(selectedBinding.command);
+      const supportedBindingCommand =
+        bindingCommand === 'open_relay' ||
+        bindingCommand === 'close_relay' ||
+        bindingCommand === 'start_pump' ||
+        bindingCommand === 'stop_pump'
+          ? bindingCommand
+          : '';
+      if (supportedBindingCommand && selectedBinding.target) {
+        return {
+          strategyKind,
+          routingMode: 'control_config_direct',
+          fallbackReason: null,
+          logicalActionCode: args.actionCode,
+          steps: [
+            {
+              actionCode: supportedBindingCommand,
+              moduleCode: selectedBinding.moduleCode || this.resolveActionModuleCode(supportedBindingCommand, null),
+              targetRef:
+                supportedBindingCommand === 'start_pump' || supportedBindingCommand === 'stop_pump'
+                  ? logicalTarget
+                  : selectedBinding.target,
+              payload: {
+                ...routedPayloadBase,
+                routed_binding_target: selectedBinding.target,
+                routed_binding_command: supportedBindingCommand,
+              },
+            },
+          ],
+        };
+      }
+      return {
+        strategyKind,
+        routingMode: 'control_config_fallback',
+        fallbackReason: 'single_relay_follow binding command not executable',
+        logicalActionCode: args.actionCode,
+        steps: [fallbackStep],
+      };
+    }
+
+    return {
+      strategyKind,
+      routingMode: 'control_config_fallback',
+      fallbackReason: 'meter_breaker_modbus currently uses firmware-native pump action',
+      logicalActionCode: args.actionCode,
+      steps: [fallbackStep],
+    };
+  }
+
+  private async scheduleDelayedRealtimeDispatch(commandToken: string, delayMs: number) {
+    const timeoutMs = Math.max(1, Math.trunc(delayMs));
+    setTimeout(() => {
+      const tcpServer = this.getTcpJsonV1Server();
+      if (!tcpServer) {
+        return;
+      }
+      void tcpServer.dispatchQueuedCommandNow(commandToken).catch(() => null);
+    }, timeoutMs);
   }
 
   private resolveSessionLegacyAction(
@@ -1165,6 +1849,7 @@ export class DeviceGatewayService {
     if (
       targetType === 'valve' ||
       moduleCode === 'single_valve_control' ||
+      moduleCode === 'dual_valve_control' ||
       targetRef.startsWith('valve')
     ) {
       return valveAction;
@@ -1215,6 +1900,80 @@ export class DeviceGatewayService {
     return payload;
   }
 
+  private firstPresentValue(...candidates: unknown[]) {
+    for (const candidate of candidates) {
+      if (candidate === undefined || candidate === null || candidate === '') {
+        continue;
+      }
+      return candidate;
+    }
+    return undefined;
+  }
+
+  private normalizeUpgradeFirmwareParams(value: Record<string, unknown>) {
+    const source = this.asObject(value);
+    const params = this.asObject(source.params);
+    const normalized: Record<string, unknown> = { ...params };
+
+    const assign = (key: string, ...candidates: unknown[]) => {
+      const resolved = this.firstPresentValue(...candidates);
+      if (resolved !== undefined) {
+        normalized[key] = resolved;
+      }
+    };
+
+    assign(
+      'ut',
+      params.ut,
+      params.upgrade_token,
+      params.upgradeToken,
+      source.ut,
+      source.upgrade_token,
+      source.upgradeToken
+    );
+    assign(
+      'rcd',
+      params.rcd,
+      params.release_code,
+      params.releaseCode,
+      params.target_version,
+      params.targetVersion,
+      source.rcd,
+      source.release_code,
+      source.releaseCode,
+      source.target_version,
+      source.targetVersion
+    );
+    assign('url', params.url, params.package_url, params.packageUrl, source.url, source.package_url, source.packageUrl);
+    assign(
+      'sz',
+      params.sz,
+      params.package_size,
+      params.packageSize,
+      params.package_size_bytes,
+      params.packageSizeBytes,
+      source.sz,
+      source.package_size,
+      source.packageSize,
+      source.package_size_bytes,
+      source.packageSizeBytes
+    );
+    assign(
+      'sum',
+      params.sum,
+      params.checksum,
+      params.package_checksum,
+      params.packageChecksum,
+      source.sum,
+      source.checksum,
+      source.package_checksum,
+      source.packageChecksum
+    );
+    assign('etag', params.etag, params.package_etag, params.packageEtag, source.etag, source.package_etag, source.packageEtag);
+
+    return normalized;
+  }
+
   private buildCompactCommandPayload(
     value: Record<string, unknown>,
     options?: { msgType?: string | null }
@@ -1233,8 +1992,8 @@ export class DeviceGatewayService {
     assignString('sc', this.toWireScopeCode(source.scope));
     assignString('qc', this.toWireQueryCode(source.query_code));
     assignString('ac', this.toWireActionCode(source.action_code));
+    assignString('mc', this.toWireModuleCode(source.module_code));
     if (!isExecute) {
-      assignString('mc', this.toWireModuleCode(source.module_code));
       assignString('mi', this.asString(source.module_instance_code));
       assignString('cc', this.asString(source.channel_code));
     }
@@ -1268,6 +2027,9 @@ export class DeviceGatewayService {
     }
     if (source.runtime_rules && typeof source.runtime_rules === 'object' && !Array.isArray(source.runtime_rules)) {
       compactPayload.rr = this.asObject(source.runtime_rules);
+    }
+    if (source.control_config && typeof source.control_config === 'object' && !Array.isArray(source.control_config)) {
+      compactPayload.cc = this.asObject(source.control_config);
     }
     if (source.resource_inventory && typeof source.resource_inventory === 'object' && !Array.isArray(source.resource_inventory)) {
       compactPayload.ri = this.asObject(source.resource_inventory);
@@ -1303,6 +2065,7 @@ export class DeviceGatewayService {
           'hardware_rev',
           'channel_bindings',
           'runtime_rules',
+          'control_config',
           'resource_inventory',
           'params',
           'session_id',
@@ -1403,6 +2166,9 @@ export class DeviceGatewayService {
       payload.module_code = this.resolveActionModuleCode(actionCode, payload.module_code);
       payload.target_ref = this.resolveActionTargetRef(actionCode, payload, payload.channel_code);
       payload.channel_code = null;
+      if (actionCode === 'upgrade_firmware') {
+        payload.params = this.normalizeUpgradeFirmwareParams(payload);
+      }
     } else if (normalizedCommandCode === 'SYNC_CONFIG') {
       type = 'SYNC_CONFIG';
     } else {
@@ -1465,8 +2231,10 @@ export class DeviceGatewayService {
     return {
       retry_limit: this.getRetryLimit(),
       sent_timeout_seconds: this.getSentTimeoutSeconds(),
+      upgrade_ack_timeout_seconds: this.getUpgradeAckTimeoutSeconds(),
       heartbeat_timeout_seconds: this.getHeartbeatTimeoutSeconds(),
       disconnect_grace_seconds: this.getDisconnectGraceSeconds(),
+      large_command_stabilization_seconds: this.getLargeCommandStabilizationSeconds(),
       retry_base_delay_seconds: this.getRetryBaseDelaySeconds(),
       retry_max_delay_seconds: this.getRetryMaxDelaySeconds(),
       dead_letter_status: 'dead_letter',
@@ -1516,6 +2284,118 @@ export class DeviceGatewayService {
       ...this.buildGatewayResponsePayload(event),
       ...(transportPatch ? { transport: { ...this.asObject(current.transport), ...transportPatch } } : {})
     };
+  }
+
+  private isUpgradeFirmwareCommand(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    const payload = this.asObject(input.requestPayload);
+    const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
+    return commandCode === 'EXECUTE_ACTION' && actionCode === 'upgrade_firmware';
+  }
+
+  private extractUpgradeEventReport(event: DeviceRuntimeEvent): UpgradeEventReport | null {
+    const payload = this.asObject(event.payload);
+    const eventCode = this.asString(payload.event_code ?? payload.eventCode ?? payload.ec).toLowerCase();
+    if (!['upg', 'upgrade_firmware', 'device_upgrade'].includes(eventCode)) {
+      return null;
+    }
+
+    const stage = this.asString(payload.stage ?? payload.stg).toLowerCase();
+    const result = this.asString(
+      payload.result ?? payload.status ?? payload.command_status ?? payload.commandStatus ?? payload.res
+    ).toLowerCase();
+    const progressPercent = this.asNumber(payload.progress_percent ?? payload.progressPercent ?? payload.pp);
+    const firmwareVersion =
+      this.asString(payload.firmware_version ?? payload.firmwareVersion ?? payload.fv) || null;
+    const checksum =
+      this.asString(payload.checksum ?? payload.package_checksum ?? payload.packageChecksum ?? payload.sum) || null;
+    const reasonCode =
+      this.asString(payload.reason_code ?? payload.reasonCode ?? payload.reject_code ?? payload.rejectCode ?? payload.rc) || null;
+    const message = this.asString(payload.message ?? payload.msg) || null;
+    const upgradeToken = this.asString(payload.upgrade_token ?? payload.upgradeToken ?? payload.ut);
+
+    if (!upgradeToken) {
+      return null;
+    }
+
+    return {
+      eventCode,
+      upgradeToken,
+      stage,
+      result: result || null,
+      progressPercent,
+      reasonCode,
+      message,
+      firmwareVersion,
+      checksum
+    };
+  }
+
+  private normalizeUpgradeJobItemStage(value: unknown) {
+    const normalized = this.asString(value).toLowerCase();
+    if (
+      [
+        'pending',
+        'command_sent',
+        'accepted',
+        'command_acked',
+        'downloading',
+        'downloaded',
+        'verified',
+        'staged',
+        'scheduled',
+        'installing',
+        'rebooting',
+        'boot_confirmed',
+        'rollback_running',
+        'rollback_succeeded',
+        'rollback_failed',
+        'succeeded',
+        'failed',
+        'cancelled'
+      ].includes(normalized)
+    ) {
+      return normalized;
+    }
+    return 'pending';
+  }
+
+  private deriveUpgradeJobItemStatus(input: {
+    stage: string;
+    result?: string | null;
+    commandAccepted?: boolean | null;
+  }) {
+    const result = this.asString(input.result).toLowerCase();
+    if (result === 'failed') return 'failed';
+    if (result === 'cancelled') return 'cancelled';
+    if (input.stage === 'rollback_running') return 'rollback_running';
+    if (input.stage === 'rollback_succeeded') return 'rollback_succeeded';
+    if (input.stage === 'rollback_failed') return 'rollback_failed';
+    if (result === 'boot_confirmed' || input.stage === 'boot_confirmed') return 'boot_confirmed';
+    if (result === 'accepted' && input.stage === 'pending') return 'accepted';
+    if (result === 'succeeded' || input.stage === 'succeeded') return 'succeeded';
+    if (input.commandAccepted && input.stage === 'pending') return 'command_acked';
+    return input.stage;
+  }
+
+  private deriveUpgradeJobStatusFromSummary(summary: {
+    total: number;
+    pending: number;
+    active: number;
+    success: number;
+    failed: number;
+    cancelled: number;
+  }) {
+    if (summary.total <= 0 || summary.pending === summary.total) return 'pending';
+    if (summary.success === summary.total) return 'success';
+    if (summary.failed + summary.cancelled === summary.total) return 'failed';
+    if (summary.success > 0 && summary.failed + summary.cancelled > 0 && summary.active === 0 && summary.pending === 0) {
+      return 'partial_success';
+    }
+    return 'running';
   }
 
   private isSynchronousStartCommand(input: {
@@ -1584,6 +2464,130 @@ export class DeviceGatewayService {
     const payload = this.asObject(input.requestPayload);
     const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
     return isNonReplayableRealtimeActionCode(actionCode);
+  }
+
+  private requiresStableConnectionWindow(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    const payload = this.asObject(input.requestPayload);
+    const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
+    if (commandCode === 'SYNC_CONFIG') return true;
+    return (
+      commandCode === 'EXECUTE_ACTION' &&
+      ['ota_prepare', 'ota_start', 'ota_cancel', 'ota_commit', 'ota_rollback'].includes(actionCode)
+    );
+  }
+
+  private getCommandAckTimeoutSeconds(input: {
+    commandCode?: string | null;
+    requestPayload?: Record<string, unknown> | null;
+  }) {
+    const commandCode = this.asString(input.commandCode).toUpperCase();
+    const payload = this.asObject(input.requestPayload);
+    const actionCode = this.asString(payload.action_code ?? payload.actionCode).toLowerCase();
+    if (commandCode === 'EXECUTE_ACTION' && actionCode === 'upgrade_firmware') {
+      return this.getUpgradeAckTimeoutSeconds();
+    }
+    return this.getSentTimeoutSeconds();
+  }
+
+  private async getActiveConnectionTiming(
+    imei: string,
+    connectionId: string | null | undefined,
+    client: PoolClient
+  ) {
+    const normalizedConnectionId = this.asString(connectionId);
+    const values: unknown[] = [TENANT_ID, imei];
+    const filters = ['tenant_id = $1', 'imei = $2', 'disconnected_at is null'];
+
+    if (normalizedConnectionId) {
+      values.push(normalizedConnectionId);
+      filters.push(`connection_id = $${values.length}`);
+    }
+
+    const result = await this.db.query<{
+      connectionId: string;
+      connectedAt: string | null;
+      lastRegisterAt: string | null;
+      lastHeartbeatAt: string | null;
+      lastMsgType: string | null;
+    }>(
+      `
+      select
+        connection_id as "connectionId",
+        connected_at::text as "connectedAt",
+        nullif(audit_snapshot_json->>'last_register_at', '') as "lastRegisterAt",
+        nullif(audit_snapshot_json->>'last_heartbeat_at', '') as "lastHeartbeatAt",
+        nullif(audit_snapshot_json->>'last_msg_type', '') as "lastMsgType"
+      from device_connection_session
+      where ${filters.join(' and ')}
+      order by connected_at desc nulls last
+      limit 1
+      `,
+      values,
+      client
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async evaluateDispatchStabilizationWindow(
+    input: {
+      imei: string;
+      connectionId?: string | null;
+      commandCode?: string | null;
+      requestPayload?: Record<string, unknown> | null;
+    },
+    client: PoolClient
+  ) {
+    if (!this.requiresStableConnectionWindow(input)) {
+      return null;
+    }
+
+    const waitSeconds = this.getLargeCommandStabilizationSeconds();
+    if (waitSeconds <= 0) {
+      return null;
+    }
+
+    const timing = await this.getActiveConnectionTiming(input.imei, input.connectionId, client);
+    if (!timing?.connectedAt) {
+      return null;
+    }
+
+    const connectedAtMs = new Date(timing.connectedAt).getTime();
+    if (!Number.isFinite(connectedAtMs)) {
+      return null;
+    }
+
+    const registerAtMs = timing.lastRegisterAt ? new Date(timing.lastRegisterAt).getTime() : Number.NaN;
+    const heartbeatAtMs = timing.lastHeartbeatAt ? new Date(timing.lastHeartbeatAt).getTime() : Number.NaN;
+    const stableAnchorMs = Number.isFinite(registerAtMs)
+      ? registerAtMs
+      : Number.isFinite(heartbeatAtMs)
+        ? heartbeatAtMs
+        : Number.NaN;
+    if (!Number.isFinite(stableAnchorMs)) {
+      return {
+        reason: 'awaiting_connection_identity',
+        connection_id: timing.connectionId,
+        wait_for: ['REGISTER', 'HEARTBEAT'],
+        last_msg_type: timing.lastMsgType || null,
+      } as const;
+    }
+
+    const remainingMs = Math.max(connectedAtMs, stableAnchorMs) + waitSeconds * 1000 - Date.now();
+    if (remainingMs <= 0) {
+      return null;
+    }
+
+    return {
+      reason: 'connection_stabilizing',
+      connection_id: timing.connectionId,
+      wait_seconds: Math.ceil(remainingMs / 1000),
+      stabilize_until: new Date(connectedAtMs + waitSeconds * 1000).toISOString(),
+    } as const;
   }
 
   private resolveWorkflowActionCode(commandDispatch: ResolvedCommandDispatch | null, event: DeviceRuntimeEvent) {
@@ -1726,10 +2730,12 @@ export class DeviceGatewayService {
       }
     };
     const featureModules = this.asStringArray(payload.feature_modules ?? payload.featureModules);
-    const resourceInventory = this.asObject(payload.resource_inventory ?? payload.resourceInventory);
-    const runtimeRules = this.asObject(payload.runtime_rules ?? payload.runtimeRules);
+    const resourceInventory = this.asObject(payload.resource_inventory ?? payload.resourceInventory ?? payload.ri);
+    const runtimeRules = this.asObject(payload.runtime_rules ?? payload.runtimeRules ?? payload.rr);
+    const controlConfig = this.asObject(payload.control_config ?? payload.controlConfig ?? payload.cc);
     const controllerState = this.asObject(payload.controller_state ?? payload.controllerState);
     const commonStatus = this.asObject(payload.common_status ?? payload.commonStatus);
+    const capabilityLimits = this.asObject(payload.limits ?? payload.capability_limits ?? payload.capabilityLimits);
 
     assignString('software_family', payload.software_family, payload.softwareFamily, identity.software_family, identity.softwareFamily);
     assignString('software_version', payload.software_version, payload.softwareVersion, identity.software_version, identity.softwareVersion);
@@ -1757,17 +2763,44 @@ export class DeviceGatewayService {
     assignString('chip_sn', payload.chip_sn, payload.chipSn);
     assignString('module_model', payload.module_model, payload.moduleModel);
     assignNumber('config_version', payload.config_version, payload.configVersion);
+    assignNumber(
+      'capability_version',
+      payload.capability_version,
+      payload.capabilityVersion,
+      payload.cap_ver,
+      commonStatus.capability_version,
+      commonStatus.capabilityVersion,
+    );
+    assignString(
+      'capability_hash',
+      payload.capability_hash,
+      payload.capabilityHash,
+      payload.cap_hash,
+      commonStatus.capability_hash,
+      commonStatus.capabilityHash,
+    );
+    assignString('config_bitmap', payload.config_bitmap, payload.configBitmap);
+    assignString('actions_bitmap', payload.actions_bitmap, payload.actionsBitmap);
+    assignString('queries_bitmap', payload.queries_bitmap, payload.queriesBitmap);
 
     if (featureModules.length > 0) {
       patch.feature_modules = featureModules;
+      patch.auto_identified = true;
+    }
+    if (Object.keys(capabilityLimits).length > 0) {
+      patch.capability_limits = capabilityLimits;
       patch.auto_identified = true;
     }
     if (Object.keys(resourceInventory).length > 0) {
       patch.resource_inventory = resourceInventory;
       patch.auto_identified = true;
     }
-    if (Array.isArray(payload.channel_bindings ?? payload.channelBindings)) {
-      patch.channel_bindings = payload.channel_bindings ?? payload.channelBindings;
+    if (Object.keys(controlConfig).length > 0) {
+      patch.control_config = controlConfig;
+      patch.auto_identified = true;
+    }
+    if (Array.isArray(payload.channel_bindings ?? payload.channelBindings ?? payload.cb)) {
+      patch.channel_bindings = payload.channel_bindings ?? payload.channelBindings ?? payload.cb;
     }
     if (Object.keys(runtimeRules).length > 0) {
       patch.runtime_rules = runtimeRules;
@@ -1797,7 +2830,8 @@ export class DeviceGatewayService {
         runtime_state as "runtimeState",
         nullif(ext_json->>'project_id', '') as "projectId",
         nullif(ext_json->>'block_id', '') as "blockId",
-        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode"
+        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode",
+        coalesce(ext_json->'control_config', '{}'::jsonb) as "controlConfig"
       from device
       where tenant_id = $1 and imei = $2
       limit 1
@@ -1821,7 +2855,8 @@ export class DeviceGatewayService {
         runtime_state as "runtimeState",
         nullif(ext_json->>'project_id', '') as "projectId",
         nullif(ext_json->>'block_id', '') as "blockId",
-        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode"
+        nullif(ext_json->>'source_node_code', '') as "sourceNodeCode",
+        coalesce(ext_json->'control_config', '{}'::jsonb) as "controlConfig"
       from device
       where tenant_id = $1 and id = $2::uuid
       limit 1
@@ -1892,6 +2927,99 @@ export class DeviceGatewayService {
       limit 1
       `,
       [commandId],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async resolveDeviceCommandById(commandId: string | null | undefined, client: PoolClient) {
+    if (!this.looksLikeUuid(commandId)) return null;
+
+    const result = await this.db.query<ResolvedDeviceCommand>(
+      `
+      select
+        id,
+        command_id::text as "commandToken",
+        session_id as "sessionId",
+        target_device_id as "targetDeviceId",
+        command_code as "commandCode",
+        command_status as "commandStatus",
+        start_token as "startToken",
+        session_ref as "sessionRef",
+        response_payload_json as "responsePayload"
+      from device_command
+      where tenant_id = $1
+        and id = $2::uuid
+      limit 1
+      `,
+      [TENANT_ID, commandId],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async resolveUpgradeJobItemByToken(
+    upgradeToken: string,
+    imei: string,
+    client: PoolClient
+  ) {
+    const result = await this.db.query<ResolvedUpgradeJobItem>(
+      `
+      select
+        i.id,
+        i.job_id as "jobId",
+        i.imei,
+        i.command_id::text as "commandId",
+        i.status,
+        i.stage,
+        i.progress_percent as "progressPercent",
+        i.last_error_code as "lastErrorCode",
+        i.last_error_message as "lastErrorMessage",
+        i.detail_json as "detailJson"
+      from device_upgrade_job_item i
+      where i.tenant_id = $1
+        and i.upgrade_token = $2
+        and i.imei = $3
+      limit 1
+      `,
+      [TENANT_ID, upgradeToken, imei],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async resolveUpgradeDeviceCommandByToken(
+    upgradeToken: string,
+    imei: string,
+    client: PoolClient
+  ) {
+    const result = await this.db.query<ResolvedDeviceCommand>(
+      `
+      select
+        id,
+        command_id::text as "commandToken",
+        session_id as "sessionId",
+        target_device_id as "targetDeviceId",
+        command_code as "commandCode",
+        command_status as "commandStatus",
+        start_token as "startToken",
+        session_ref as "sessionRef",
+        response_payload_json as "responsePayload"
+      from device_command
+      where tenant_id = $1
+        and imei = $2
+        and upper(command_code) = 'EXECUTE_ACTION'
+        and lower(coalesce(request_payload_json->>'action_code', request_payload_json->>'actionCode', '')) = 'upgrade_firmware'
+        and coalesce(
+          request_payload_json #>> '{params,ut}',
+          request_payload_json #>> '{params,upgrade_token}',
+          request_payload_json->>'upgrade_token',
+          request_payload_json->>'upgradeToken'
+        ) = $3
+      order by created_at desc
+      limit 1
+      `,
+      [TENANT_ID, imei, upgradeToken],
       client
     );
     return result.rows[0] ?? null;
@@ -2163,6 +3291,27 @@ export class DeviceGatewayService {
   }
 
   private parseTcpAuditCursor(cursor: string | null | undefined) {
+    const normalized = this.asString(cursor);
+    if (!normalized) return null;
+    try {
+      const decoded = JSON.parse(Buffer.from(normalized, 'base64url').toString('utf8')) as {
+        createdAt?: string;
+        id?: string;
+      };
+      const createdAt = this.toIsoTimestamp(decoded.createdAt ?? null);
+      const id = this.asString(decoded.id);
+      if (!createdAt || !id) return null;
+      return { createdAt, id };
+    } catch {
+      return null;
+    }
+  }
+
+  private buildCardAuditCursor(createdAt: string, id: string) {
+    return Buffer.from(JSON.stringify({ createdAt, id }), 'utf8').toString('base64url');
+  }
+
+  private parseCardAuditCursor(cursor: string | null | undefined) {
     const normalized = this.asString(cursor);
     if (!normalized) return null;
     try {
@@ -2476,6 +3625,191 @@ export class DeviceGatewayService {
     };
   }
 
+  async listCardAuditLogs(params?: {
+    imei?: string;
+    event_code?: string;
+    reason_code?: string;
+    audit_outcome?: string;
+    card_token_suffix?: string;
+    keyword?: string;
+    start_at?: string;
+    end_at?: string;
+    cursor?: string;
+    limit?: number;
+  }) {
+    const filters: string[] = ['log_scope.tenant_id = $1'];
+    const values: unknown[] = [TENANT_ID];
+
+    if (this.asString(params?.imei)) {
+      values.push(this.asString(params?.imei));
+      filters.push(`log_scope.imei = $${values.length}`);
+    }
+    if (this.asString(params?.event_code)) {
+      values.push(this.asString(params?.event_code).toLowerCase());
+      filters.push(`lower(coalesce(log_scope.event_code, '')) = $${values.length}`);
+    }
+    if (this.asString(params?.reason_code)) {
+      values.push(this.asString(params?.reason_code).toLowerCase());
+      filters.push(`lower(coalesce(log_scope.reason_code, '')) = $${values.length}`);
+    }
+    if (this.asString(params?.audit_outcome)) {
+      values.push(this.asString(params?.audit_outcome).toLowerCase());
+      filters.push(`lower(coalesce(log_scope.audit_outcome, '')) = $${values.length}`);
+    }
+    if (this.asString(params?.card_token_suffix)) {
+      values.push(this.extractTokenSuffix(this.asString(params?.card_token_suffix)));
+      filters.push(`log_scope.card_token_suffix = $${values.length}`);
+    }
+    if (this.asString(params?.keyword)) {
+      values.push(`%${this.asString(params?.keyword)}%`);
+      filters.push(
+        `(coalesce(log_scope.raw_message, '') ilike $${values.length}
+          or coalesce(log_scope.msg_id, '') ilike $${values.length}
+          or coalesce(log_scope.swipe_event_id, '') ilike $${values.length}
+          or coalesce(log_scope.payload_json::text, '') ilike $${values.length})`
+      );
+    }
+
+    const startAt = this.toIsoTimestamp(this.asString(params?.start_at));
+    if (startAt) {
+      values.push(startAt);
+      filters.push(`coalesce(log_scope.occurred_at, log_scope.server_rx_ts, log_scope.created_at) >= $${values.length}::timestamptz`);
+    }
+
+    const endAt = this.toIsoTimestamp(this.asString(params?.end_at));
+    if (endAt) {
+      values.push(endAt);
+      filters.push(`coalesce(log_scope.occurred_at, log_scope.server_rx_ts, log_scope.created_at) <= $${values.length}::timestamptz`);
+    }
+
+    const cursor = this.parseCardAuditCursor(params?.cursor);
+    if (cursor) {
+      values.push(cursor.createdAt);
+      const tsIndex = values.length;
+      values.push(cursor.id);
+      const idIndex = values.length;
+      filters.push(
+        `(log_scope.created_at < $${tsIndex}::timestamptz
+          or (log_scope.created_at = $${tsIndex}::timestamptz and log_scope.id < $${idIndex}::uuid))`
+      );
+    }
+
+    const limit = Math.min(Math.max(Number(params?.limit ?? 50), 1), 100);
+    values.push(limit + 1);
+
+    const result = await this.db.query<DeviceCardAuditLogRecord>(
+      `
+      with log_scope as (
+        select
+          dcal.id as id,
+          dcal.device_id as device_id,
+          d.device_code as device_code,
+          d.device_name as device_name,
+          dcal.message_log_id as message_log_id,
+          dcal.tcp_audit_log_id as tcp_audit_log_id,
+          dcal.imei as imei,
+          dcal.msg_id as msg_id,
+          dcal.seq_no as seq_no,
+          dcal.msg_type as msg_type,
+          dcal.event_type as event_type,
+          dcal.event_code as event_code,
+          dcal.reason_code as reason_code,
+          dcal.audit_outcome as audit_outcome,
+          dcal.audit_source as audit_source,
+          dcal.swipe_action as swipe_action,
+          dcal.swipe_event_id as swipe_event_id,
+          dcal.target_ref as target_ref,
+          dcal.card_token as card_token,
+          dcal.card_token_suffix as card_token_suffix,
+          dcal.occurred_at as occurred_at,
+          dcal.server_rx_ts as server_rx_ts,
+          dcal.idempotency_key as idempotency_key,
+          dcal.raw_message as raw_message,
+          dcal.payload_json as payload_json,
+          dcal.created_at as created_at,
+          dcal.updated_at as updated_at,
+          dcal.tenant_id as tenant_id
+        from device_card_audit_log dcal
+        left join device d on d.id = dcal.device_id
+      )
+      select
+        log_scope.id::text as id,
+        log_scope.device_id::text as "deviceId",
+        log_scope.device_code as "deviceCode",
+        log_scope.device_name as "deviceName",
+        log_scope.message_log_id::text as "messageLogId",
+        log_scope.tcp_audit_log_id::text as "tcpAuditLogId",
+        log_scope.imei as imei,
+        log_scope.msg_id as "msgId",
+        log_scope.seq_no as "seqNo",
+        log_scope.msg_type as "msgType",
+        log_scope.event_type as "eventType",
+        log_scope.event_code as "eventCode",
+        log_scope.reason_code as "reasonCode",
+        log_scope.audit_outcome as "auditOutcome",
+        log_scope.audit_source as "auditSource",
+        log_scope.swipe_action as "swipeAction",
+        log_scope.swipe_event_id as "swipeEventId",
+        log_scope.target_ref as "targetRef",
+        log_scope.card_token as "cardToken",
+        log_scope.card_token_suffix as "cardTokenSuffix",
+        log_scope.occurred_at::text as "occurredAt",
+        log_scope.server_rx_ts::text as "serverRxTs",
+        log_scope.idempotency_key as "idempotencyKey",
+        log_scope.raw_message as "rawMessage",
+        log_scope.payload_json as payload,
+        log_scope.created_at::text as "createdAt",
+        log_scope.updated_at::text as "updatedAt"
+      from log_scope
+      where ${filters.join(' and ')}
+      order by log_scope.created_at desc, log_scope.id desc
+      limit $${values.length}
+      `,
+      values
+    );
+
+    const hasMore = result.rows.length > limit;
+    const items = hasMore ? result.rows.slice(0, limit) : result.rows;
+    const nextCursor = hasMore
+      ? this.buildCardAuditCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
+      : null;
+
+    return {
+      items: items.map((row) => ({
+        id: row.id,
+        deviceId: row.deviceId,
+        deviceCode: row.deviceCode,
+        deviceName: row.deviceName,
+        messageLogId: row.messageLogId,
+        tcpAuditLogId: row.tcpAuditLogId,
+        imei: row.imei,
+        msgId: row.msgId,
+        seqNo: row.seqNo,
+        msgType: row.msgType,
+        eventType: row.eventType,
+        eventCode: row.eventCode,
+        reasonCode: row.reasonCode,
+        auditOutcome: row.auditOutcome,
+        auditSource: row.auditSource,
+        swipeAction: row.swipeAction,
+        swipeEventId: row.swipeEventId,
+        targetRef: row.targetRef,
+        cardToken: row.cardToken,
+        cardTokenSuffix: row.cardTokenSuffix,
+        occurredAt: row.occurredAt,
+        serverRxTs: row.serverRxTs,
+        idempotencyKey: row.idempotencyKey,
+        rawMessage: row.rawMessage,
+        payload: this.asObject(row.payload),
+        createdAt: row.createdAt,
+        updatedAt: row.updatedAt
+      })),
+      limit,
+      hasMore,
+      nextCursor
+    };
+  }
+
   private async insertInteractionLogInClient(input: {
     id?: string | null;
     imei: string;
@@ -2678,6 +4012,7 @@ export class DeviceGatewayService {
     connectionId?: string | null;
     transportType?: string | null;
     protocolVersion?: string | null;
+    msgType?: string | null;
     remoteAddr?: string | null;
     remotePort?: number | null;
   }) {
@@ -2691,6 +4026,21 @@ export class DeviceGatewayService {
         return { bound: false, reason: 'device_not_found' as const, imei, connection_id: connectionId };
       }
       const recoveredAt = new Date().toISOString();
+      const normalizedMsgType = this.normalizeWireMsgType(input.msgType);
+      const auditSnapshotPatch: Record<string, unknown> = {
+        last_seen_at: recoveredAt,
+        remote_addr: this.asString(input.remoteAddr) || null,
+        remote_port: input.remotePort ?? null,
+      };
+      if (normalizedMsgType) {
+        auditSnapshotPatch.last_msg_type = normalizedMsgType;
+        if (normalizedMsgType === 'REGISTER') {
+          auditSnapshotPatch.last_register_at = recoveredAt;
+        }
+        if (normalizedMsgType === 'HEARTBEAT') {
+          auditSnapshotPatch.last_heartbeat_at = recoveredAt;
+        }
+      }
 
       await this.db.query(
         `
@@ -2744,11 +4094,7 @@ export class DeviceGatewayService {
             this.asString(input.protocolVersion) || this.getProtocolName(),
             this.asString(input.remoteAddr) || null,
             input.remotePort ?? null,
-            JSON.stringify({
-              last_seen_at: new Date().toISOString(),
-              remote_addr: this.asString(input.remoteAddr) || null,
-              remote_port: input.remotePort ?? null
-            })
+            JSON.stringify(auditSnapshotPatch)
           ],
           client
         );
@@ -2773,10 +4119,7 @@ export class DeviceGatewayService {
             this.asString(input.protocolVersion) || this.getProtocolName(),
             this.asString(input.remoteAddr) || null,
             input.remotePort ?? null,
-            JSON.stringify({
-              remote_addr: this.asString(input.remoteAddr) || null,
-              remote_port: input.remotePort ?? null
-            })
+            JSON.stringify(auditSnapshotPatch)
           ],
           client
         );
@@ -3024,7 +4367,7 @@ export class DeviceGatewayService {
 
   private extractWorkflowState(envelope: DeviceEnvelope, event: DeviceRuntimeEvent) {
     const controllerState = this.asObject(event.payload.controller_state ?? event.payload.controllerState);
-    return this.asString(
+    const workflowState = normalizeRuntimeWorkflowState(
       controllerState.workflow_state ??
         controllerState.workflowState ??
         event.payload.workflow_state ??
@@ -3034,7 +4377,8 @@ export class DeviceGatewayService {
         event.payload.run_state ??
         event.payload.runState ??
         envelope.runState
-    ).toLowerCase();
+    );
+    return workflowState ? workflowState.toLowerCase() : '';
   }
 
   private async completePendingStartIfNeeded(
@@ -3054,10 +4398,7 @@ export class DeviceGatewayService {
       this.asString(event.payload.command_code).toLowerCase();
     const workflowState = this.extractWorkflowState(envelope, event);
     const startedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && commandCode === 'start_session';
-    const startedByRuntime =
-      workflowState === 'running' ||
-      workflowState === 'billing' ||
-      workflowState === 'active';
+    const startedByRuntime = isActiveRuntimeWorkflowState(workflowState);
 
     if (!startedByAck && !startedByRuntime) {
       return null;
@@ -3115,6 +4456,134 @@ export class DeviceGatewayService {
     );
 
     return started;
+  }
+
+  private isTimeoutLikeFailureReason(reasonCode: string) {
+    const normalized = this.asString(reasonCode).toLowerCase();
+    return normalized.includes('timeout') || normalized.includes('timed_out');
+  }
+
+  private resolveStartFailureCompensationCommand(commandCode: string) {
+    const normalized = this.asString(commandCode).toUpperCase();
+    if (normalized === 'OPEN_VALVE') return 'CLOSE_VALVE';
+    if (normalized === 'START_PUMP') return 'STOP_PUMP';
+    if (normalized === 'START_SESSION') return 'STOP_SESSION';
+    return null;
+  }
+
+  private async dispatchPendingStartFailureCompensation(
+    session: ResolvedSession,
+    orderId: string | null | undefined,
+    reasonCode: string,
+    client: PoolClient
+  ) {
+    const startCommands = await this.db.query<{
+      id: string;
+      commandCode: string;
+      commandStatus: string;
+      imei: string;
+      targetDeviceId: string | null;
+      requestPayload: Record<string, unknown>;
+    }>(
+      `
+      select
+        id::text as id,
+        command_code as "commandCode",
+        command_status as "commandStatus",
+        imei,
+        target_device_id::text as "targetDeviceId",
+        request_payload_json as "requestPayload"
+      from device_command
+      where tenant_id = $1
+        and session_id = $2::uuid
+        and coalesce(request_payload_json->>'command_plan', '') = 'session_start'
+      order by created_at asc
+      `,
+      [TENANT_ID, session.id],
+      client
+    );
+
+    if (startCommands.rows.length === 0) {
+      return null;
+    }
+
+    const timeoutLikeFailure = this.isTimeoutLikeFailureReason(reasonCode);
+    const compensationPlan = new Map<
+      string,
+      { commandCode: string; targetDeviceId: string; imei: string }
+    >();
+    for (const command of startCommands.rows) {
+      const compensationCommandCode = this.resolveStartFailureCompensationCommand(command.commandCode);
+      if (!compensationCommandCode || !command.targetDeviceId || !command.imei) {
+        continue;
+      }
+      const commandStatus = this.asString(command.commandStatus).toLowerCase();
+      const shouldCompensate =
+        commandStatus === 'acked' ||
+        (timeoutLikeFailure && ['sent', 'dead_letter'].includes(commandStatus));
+      if (!shouldCompensate) {
+        continue;
+      }
+      compensationPlan.set(`${command.targetDeviceId}:${compensationCommandCode}`, {
+        commandCode: compensationCommandCode,
+        targetDeviceId: command.targetDeviceId,
+        imei: command.imei
+      });
+    }
+
+    if (compensationPlan.size === 0) {
+      return null;
+    }
+
+    const queuedCommands = [];
+    for (const plan of compensationPlan.values()) {
+      const queued = await this.queueCommandInClient(
+        {
+          target_device_id: plan.targetDeviceId,
+          imei: plan.imei,
+          session_id: session.id,
+          session_ref: session.sessionRef ?? null,
+          order_id: orderId ?? null,
+          command_code: plan.commandCode,
+          create_dispatch: true,
+          source: 'device_gateway.start_failure_compensation',
+          request_payload: {
+            requested_from: 'device_gateway',
+            command_plan: 'session_stop_compensation'
+          }
+        },
+        client
+      );
+      queuedCommands.push(queued.command);
+    }
+
+    const commandTokens = queuedCommands
+      .map((command) => this.asString(command.command_token))
+      .filter((value) => Boolean(value));
+    const deliveryResults = await this.dispatchQueuedCommandTokensNow(commandTokens);
+
+    await this.sessionStatusLogRepository.create(
+      {
+        tenantId: session.tenantId,
+        sessionId: session.id,
+        fromStatus: 'ended',
+        toStatus: 'ended',
+        actionCode: 'start_failure_compensation_requested',
+        reasonCode,
+        reasonText: 'queued compensation stop commands after pending start failure',
+        source: 'system',
+        snapshot: {
+          queued_compensation_commands: queuedCommands,
+          delivery_results: deliveryResults
+        }
+      },
+      client
+    );
+
+    return {
+      queuedCommands,
+      deliveryResults
+    };
   }
 
   private async failPendingStartSession(
@@ -3215,6 +4684,8 @@ export class DeviceGatewayService {
       );
     }
 
+    await this.dispatchPendingStartFailureCompensation(ended, settled?.orderId ?? null, input.reasonCode, client);
+
     return { session: ended, order: settled };
   }
 
@@ -3276,8 +4747,8 @@ export class DeviceGatewayService {
     const actionCode = this.resolveWorkflowActionCode(commandDispatch, event);
     const pausedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && actionCode === 'pause_session';
     const resumedByAck = event.eventType === 'DEVICE_COMMAND_ACKED' && actionCode === 'resume_session';
-    const pausedByRuntime = workflowState === 'paused';
-    const resumedByRuntime = workflowState === 'running' || workflowState === 'billing' || workflowState === 'active';
+    const pausedByRuntime = isPausedRuntimeWorkflowState(workflowState);
+    const resumedByRuntime = isActiveRuntimeWorkflowState(workflowState);
 
     if (
       (session.status === 'pausing' || session.status === 'running' || session.status === 'billing') &&
@@ -3739,6 +5210,295 @@ export class DeviceGatewayService {
     return result.rows[0] ?? null;
   }
 
+  private async markDeviceCommandAckedFromEvent(
+    deviceCommand: ResolvedDeviceCommand,
+    event: DeviceRuntimeEvent,
+    client: PoolClient
+  ) {
+    const transportPatch = {
+      retryable: false,
+      retry_delay_seconds: null,
+      next_retry_at: null,
+      dead_letter_reason: null,
+      last_transition: 'upgrade_event_acked',
+      upgrade_event_reported_at: this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString()
+    };
+    const result = await this.db.query<{
+      id: string;
+      commandStatus: string;
+      ackedAt: string | null;
+      failedAt: string | null;
+    }>(
+      `
+      update device_command
+      set command_status = 'acked',
+          ack_msg_id = coalesce(ack_msg_id, $2),
+          ack_seq_no = coalesce(ack_seq_no, $3),
+          acked_at = coalesce(acked_at, $4::timestamptz),
+          failed_at = null,
+          timeout_at = null,
+          sent_at = null,
+          response_payload_json = $5::jsonb,
+          updated_at = now()
+      where id = $1::uuid
+      returning
+        id,
+        command_status as "commandStatus",
+        acked_at as "ackedAt",
+        failed_at as "failedAt"
+      `,
+      [
+        deviceCommand.id,
+        event.msgId,
+        event.seqNo,
+        this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
+        JSON.stringify(this.mergeGatewayResponsePayload(deviceCommand.responsePayload, event, transportPatch))
+      ],
+      client
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async markDispatchAckedByCommandToken(
+    commandToken: string,
+    event: DeviceRuntimeEvent,
+    client: PoolClient
+  ) {
+    const transportPatch = {
+      retryable: false,
+      retry_delay_seconds: null,
+      next_retry_at: null,
+      dead_letter_reason: null,
+      last_transition: 'upgrade_event_acked',
+      upgrade_event_reported_at: this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString()
+    };
+    const result = await this.db.query<{ id: string; dispatchStatus: string; ackedAt: string | null }>(
+      `
+      update command_dispatch
+      set dispatch_status = 'acked',
+          acked_at = coalesce(acked_at, $3::timestamptz),
+          sent_at = null,
+          response_payload_json = coalesce(response_payload_json, '{}'::jsonb) || $4::jsonb
+      where tenant_id = $1
+        and coalesce(
+          request_payload_json->>'device_command_token',
+          request_payload_json->>'command_token',
+          request_payload_json->>'device_command_id',
+          request_payload_json->>'command_id'
+        ) = $2
+      returning id, dispatch_status as "dispatchStatus", acked_at as "ackedAt"
+      `,
+      [
+        TENANT_ID,
+        commandToken,
+        this.toIsoTimestamp(event.serverRxTs) ?? new Date().toISOString(),
+        JSON.stringify(this.buildGatewayResponsePayload(event, transportPatch))
+      ],
+      client
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async refreshUpgradeJobAggregate(jobId: string, client: PoolClient) {
+    const result = await this.db.query<{
+      total: number;
+      pending: number;
+      active: number;
+      success: number;
+      failed: number;
+      cancelled: number;
+    }>(
+      `
+      select
+        count(*)::int as total,
+        count(*) filter (where effective_status = 'pending')::int as pending,
+        count(*) filter (
+          where effective_status in (
+            'command_sent',
+            'accepted',
+            'command_acked',
+            'downloading',
+            'downloaded',
+            'verified',
+            'staged',
+            'scheduled',
+            'installing',
+            'rebooting'
+          )
+        )::int as active,
+        count(*) filter (where effective_status in ('boot_confirmed', 'succeeded'))::int as success,
+        count(*) filter (where effective_status = 'failed')::int as failed,
+        count(*) filter (where effective_status = 'cancelled')::int as cancelled
+      from (
+        select
+          case
+            when i.status = 'command_sent' and dc.command_status in ('failed', 'dead_letter') then 'failed'
+            when i.status = 'command_sent' and dc.command_status = 'acked' then 'command_acked'
+            else i.status
+          end as effective_status
+        from device_upgrade_job_item i
+        left join device_command dc on dc.tenant_id = i.tenant_id and dc.id = i.command_id
+        where i.tenant_id = $1 and i.job_id = $2
+      ) summary
+      `,
+      [TENANT_ID, jobId],
+      client
+    );
+
+    const summary = result.rows[0] ?? {
+      total: 0,
+      pending: 0,
+      active: 0,
+      success: 0,
+      failed: 0,
+      cancelled: 0
+    };
+    const nextStatus = this.deriveUpgradeJobStatusFromSummary({
+      total: Number(summary.total ?? 0),
+      pending: Number(summary.pending ?? 0),
+      active: Number(summary.active ?? 0),
+      success: Number(summary.success ?? 0),
+      failed: Number(summary.failed ?? 0),
+      cancelled: Number(summary.cancelled ?? 0)
+    });
+
+    await this.db.query(
+      `
+      update device_upgrade_job
+      set status = $3,
+          total_devices = $4,
+          success_count = $5,
+          failed_count = $6,
+          updated_at = now()
+      where tenant_id = $1 and id = $2
+      `,
+      [
+        TENANT_ID,
+        jobId,
+        nextStatus,
+        Number(summary.total ?? 0),
+        Number(summary.success ?? 0),
+        Number(summary.failed ?? 0) + Number(summary.cancelled ?? 0)
+      ],
+      client
+    );
+  }
+
+  private async syncUpgradeTrackingFromEvent(
+    event: DeviceRuntimeEvent,
+    matchedDeviceCommand: ResolvedDeviceCommand | null,
+    client: PoolClient
+  ) {
+    const report = this.extractUpgradeEventReport(event);
+    if (!report) return null;
+
+    const item = await this.resolveUpgradeJobItemByToken(report.upgradeToken, event.imei, client);
+    if (!item) {
+      const manualCommand =
+        (matchedDeviceCommand &&
+        matchedDeviceCommand.commandCode.toUpperCase() === 'EXECUTE_ACTION'
+          ? matchedDeviceCommand
+          : null) ??
+        (await this.resolveUpgradeDeviceCommandByToken(report.upgradeToken, event.imei, client));
+
+      if (!manualCommand) return null;
+
+      const deviceCommand = await this.markDeviceCommandAckedFromEvent(manualCommand, event, client);
+      const commandDispatch = await this.markDispatchAckedByCommandToken(manualCommand.commandToken, event, client);
+
+      return {
+        jobItemId: null,
+        jobId: null,
+        status: null,
+        stage: report.stage || null,
+        progressPercent: report.progressPercent,
+        deviceCommand,
+        commandDispatch
+      };
+    }
+
+    let normalizedStage = this.normalizeUpgradeJobItemStage(report.stage);
+    if (
+      normalizedStage === 'pending' &&
+      report.progressPercent !== null &&
+      report.progressPercent > 0 &&
+      report.result !== 'failed'
+    ) {
+      normalizedStage = 'downloading';
+    }
+
+    const nextStatus = this.deriveUpgradeJobItemStatus({
+      stage: normalizedStage,
+      result: report.result,
+      commandAccepted:
+        normalizedStage === 'accepted' ||
+        normalizedStage === 'command_acked' ||
+        normalizedStage === 'downloading' ||
+        normalizedStage === 'downloaded' ||
+        normalizedStage === 'verified' ||
+        normalizedStage === 'staged' ||
+        normalizedStage === 'scheduled' ||
+        normalizedStage === 'installing' ||
+        normalizedStage === 'rebooting' ||
+        report.result === 'accepted'
+    });
+
+    const detail = {
+      ...this.asObject(item.detailJson),
+      firmware_version: report.firmwareVersion || this.asString(this.asObject(item.detailJson).firmware_version) || null,
+      checksum: report.checksum || this.asString(this.asObject(item.detailJson).checksum) || null,
+      extra: {
+        ...this.asObject(this.asObject(item.detailJson).extra),
+        gateway_event_code: report.eventCode,
+        gateway_msg_id: event.msgId,
+        gateway_seq_no: event.seqNo
+      }
+    };
+
+    await this.db.query(
+      `
+      update device_upgrade_job_item
+      set status = $3,
+          stage = $4,
+          progress_percent = $5,
+          last_error_code = $6,
+          last_error_message = $7,
+          detail_json = $8::jsonb,
+          last_reported_at = now(),
+          updated_at = now()
+      where tenant_id = $1 and id = $2
+      `,
+      [
+        TENANT_ID,
+        item.id,
+        nextStatus,
+        normalizedStage,
+        report.progressPercent ?? item.progressPercent,
+        report.reasonCode ?? item.lastErrorCode,
+        report.message ?? item.lastErrorMessage,
+        JSON.stringify(detail)
+      ],
+      client
+    );
+
+    const command = matchedDeviceCommand ?? (item.commandId ? await this.resolveDeviceCommandById(item.commandId, client) : null);
+    const deviceCommand = command ? await this.markDeviceCommandAckedFromEvent(command, event, client) : null;
+    const commandDispatch = command ? await this.markDispatchAckedByCommandToken(command.commandToken, event, client) : null;
+
+    await this.refreshUpgradeJobAggregate(item.jobId, client);
+
+    return {
+      jobItemId: item.id,
+      jobId: item.jobId,
+      status: nextStatus,
+      stage: normalizedStage,
+      progressPercent: report.progressPercent ?? item.progressPercent,
+      deviceCommand,
+      commandDispatch
+    };
+  }
+
   private async createAlarm(deviceId: string, sessionId: string | null, event: DeviceRuntimeEvent, client: PoolClient) {
     const severity = this.asString(event.payload.severity).toLowerCase();
     const normalizedSeverity =
@@ -4171,6 +5931,7 @@ export class DeviceGatewayService {
     imei?: string | null;
     bridge_id?: string | null;
     protocol_version?: string | null;
+    msg_type?: string | null;
     remote_addr?: string | null;
     remote_port?: number | null;
   }) {
@@ -4183,6 +5944,7 @@ export class DeviceGatewayService {
       connectionId,
       transportType: 'http_bridge',
       protocolVersion: this.asString(input.protocol_version) || 'http-json-v1',
+      msgType: input.msg_type,
       remoteAddr: this.asString(input.remote_addr) || 'http-bridge',
       remotePort: input.remote_port ?? null
     });
@@ -4219,6 +5981,7 @@ export class DeviceGatewayService {
       imei,
       bridge_id: bridgeId,
       protocol_version: 'http-json-v1',
+      msg_type: 'HEARTBEAT',
       remote_addr: input.remote_addr,
       remote_port: input.remote_port
     });
@@ -4262,7 +6025,7 @@ export class DeviceGatewayService {
     };
 
     const dispatchPendingCommands =
-      input.dispatch_pending_commands === undefined ? true : this.asBoolean(input.dispatch_pending_commands);
+      input.dispatch_pending_commands === undefined ? false : this.asBoolean(input.dispatch_pending_commands);
     const pendingCommandDelivery = dispatchPendingCommands
       ? await this.pullPendingCommands({
           imei,
@@ -4274,6 +6037,9 @@ export class DeviceGatewayService {
       : null;
 
     return {
+      transport_contract: 'sidecar_bridge_v1',
+      delivery_contract: 'platform_queue_only',
+      device_execution_queue: false,
       bridge_id: bridgeId,
       connection_id: connection.connection_id,
       connection,
@@ -4288,13 +6054,19 @@ export class DeviceGatewayService {
             enabled: true,
             mark_sent: input.mark_sent === undefined ? true : this.asBoolean(input.mark_sent),
             include_sent: this.asBoolean(input.include_sent),
-            queue_mode: pendingCommandDelivery.queue_mode
+            queue_mode: pendingCommandDelivery.queue_mode,
+            transport_contract: 'sidecar_bridge_v1',
+            delivery_contract: 'platform_queue_only',
+            device_execution_queue: false
           }
         : {
             enabled: false,
             mark_sent: false,
             include_sent: false,
-            queue_mode: null
+            queue_mode: null,
+            transport_contract: 'sidecar_bridge_v1',
+            delivery_contract: 'platform_queue_only',
+            device_execution_queue: false
           }
     };
   }
@@ -4332,6 +6104,119 @@ export class DeviceGatewayService {
       recovery_msg_id: recovery.msgId,
       dead_letter_reason: null
     };
+  }
+
+  private async resolveSupersedingUpgradeCommand(
+    row: { id: string; imei: string; commandCode?: string | null; requestPayload?: Record<string, unknown> | null },
+    client: PoolClient
+  ) {
+    if (!this.isUpgradeFirmwareCommand({ commandCode: row.commandCode, requestPayload: row.requestPayload })) {
+      return null;
+    }
+
+    const result = await this.db.query<{ id: string; commandToken: string }>(
+      `
+      select
+        newer.id,
+        newer.command_id::text as "commandToken"
+      from device_command current_row
+      join device_command newer
+        on newer.tenant_id = current_row.tenant_id
+       and newer.imei = current_row.imei
+       and newer.id <> current_row.id
+       and newer.created_at > current_row.created_at
+       and newer.command_code = 'EXECUTE_ACTION'
+       and lower(coalesce(newer.request_payload_json->>'action_code', newer.request_payload_json->>'actionCode', '')) = 'upgrade_firmware'
+      where current_row.tenant_id = $1
+        and current_row.id = $2::uuid
+      order by newer.created_at desc
+      limit 1
+      `,
+      [TENANT_ID, row.id],
+      client
+    );
+
+    return result.rows[0] ?? null;
+  }
+
+  private async deadLetterSupersededUpgradeCommand(
+    row: DeviceCommandQueueRow,
+    supersedingCommand: { id: string; commandToken: string },
+    client: PoolClient
+  ) {
+    const transportPatch = {
+      retry_count: this.getRetryCount(row.responsePayload),
+      retryable: false,
+      next_retry_at: null,
+      retry_delay_seconds: null,
+      last_transition: 'superseded_by_newer_upgrade',
+      dead_letter_reason: 'superseded_by_newer_upgrade',
+      superseded_by_command_id: supersedingCommand.id,
+      superseded_by_command_token: supersedingCommand.commandToken,
+      superseded_at: new Date().toISOString()
+    };
+
+    await this.db.query(
+      `
+      update device_command
+      set command_status = 'dead_letter',
+          sent_at = null,
+          acked_at = null,
+          failed_at = coalesce(failed_at, now()),
+          timeout_at = coalesce(timeout_at, now()),
+          response_payload_json = $2::jsonb,
+          updated_at = now()
+      where id = $1::uuid
+      `,
+      [row.id, JSON.stringify(this.mergeTransportPayload(row.responsePayload, transportPatch))],
+      client
+    );
+
+    await this.updateDispatchStatusByCommandToken(row.commandToken, 'dead_letter', transportPatch, client);
+  }
+
+  private async closeSupersededUpgradeCommands(
+    imei: string,
+    currentCommand: { id: string; commandToken: string },
+    client: PoolClient
+  ) {
+    const result = await this.db.query<DeviceCommandQueueRow>(
+      `
+      select
+        dc.id,
+        dc.command_id::text as "commandToken",
+        dc.command_code as "commandCode",
+        dc.command_status as "commandStatus",
+        dc.target_device_id as "targetDeviceId",
+        dc.imei,
+        dc.session_id as "sessionId",
+        dc.session_ref as "sessionRef",
+        dc.start_token as "startToken",
+        dc.sent_at as "sentAt",
+        dc.acked_at as "ackedAt",
+        dc.failed_at as "failedAt",
+        dc.timeout_at as "timeoutAt",
+        dc.request_payload_json as "requestPayload",
+        dc.response_payload_json as "responsePayload"
+      from device_command dc
+      where dc.tenant_id = $1
+        and dc.imei = $2
+        and dc.id <> $3::uuid
+        and dc.command_status in ('created', 'sent', 'retry_pending')
+        and dc.command_code = 'EXECUTE_ACTION'
+        and lower(coalesce(dc.request_payload_json->>'action_code', dc.request_payload_json->>'actionCode', '')) = 'upgrade_firmware'
+      order by dc.created_at asc
+      limit 100
+      `,
+      [TENANT_ID, imei, currentCommand.id],
+      client
+    );
+
+    for (const row of result.rows) {
+      await this.deadLetterSupersededUpgradeCommand(row, currentCommand, client);
+    }
+
+    return result.rows.length;
   }
 
   private async reactivateRetryPendingCommands(
@@ -4380,6 +6265,12 @@ export class DeviceGatewayService {
     const commandTokens: string[] = [];
 
     for (const row of result.rows) {
+      const supersedingUpgradeCommand = await this.resolveSupersedingUpgradeCommand(row, client);
+      if (supersedingUpgradeCommand) {
+        await this.deadLetterSupersededUpgradeCommand(row, supersedingUpgradeCommand, client);
+        continue;
+      }
+
       const synchronousStartCommand = this.isSynchronousStartCommand({
         commandCode: row.commandCode,
         requestPayload: row.requestPayload
@@ -4851,19 +6742,35 @@ export class DeviceGatewayService {
   }
 
   async ingestRuntimeEvent(input: Record<string, unknown>) {
+    const tcpAuditLogId = this.looksLikeUuid(this.asString(input._tcp_audit_log_id)) ? this.asString(input._tcp_audit_log_id) : null;
     const envelope = this.buildValidatedEnvelope(input);
     const event = this.adapter.toRuntimeEvent(envelope);
 
-    return this.db.withTransaction(async (client) => {
+    const result = await this.db.withTransaction(async (client) => {
       const device = await this.findDeviceByImei(event.imei, client);
       const messageLog = await this.insertMessageLog(event, device?.id ?? null, client);
+      const cardAuditLog = await this.insertCardAuditLogInClient({
+        deviceId: device?.id ?? null,
+        messageLogId: messageLog.id,
+        tcpAuditLogId,
+        event,
+        client
+      });
       if (messageLog.duplicate) {
         return {
           ingested: true,
           duplicated: true,
           event_type: event.eventType,
           imei: event.imei,
-          message_log_id: null
+          message_log_id: null,
+          card_audit_log: cardAuditLog
+            ? {
+                id: cardAuditLog.id,
+                event_code: cardAuditLog.eventCode,
+                audit_outcome: cardAuditLog.auditOutcome,
+                card_token_suffix: cardAuditLog.cardTokenSuffix
+              }
+            : null
         };
       }
 
@@ -4884,19 +6791,23 @@ export class DeviceGatewayService {
         client
       );
       const skipRuntimeIngest = this.isCardSwipeMetadataEvent(event);
+      const correlationCommandToken =
+        this.asString(event.commandId ?? null) ||
+        this.asString(envelope.correlationId ?? null) ||
+        null;
 
       let commandDispatch = await this.resolveCommandDispatchById(event.commandId ?? null, client);
       const deviceCommand = commandDispatch
         ? null
         : await this.resolveDeviceCommand(
             event.imei,
-            event.commandId ?? null,
+            correlationCommandToken,
             event.startToken ?? null,
             event.sessionRef ?? null,
             client
           );
       const effectiveCommandToken =
-        this.asString(event.commandId ?? null) ||
+        correlationCommandToken ||
         deviceCommand?.commandToken ||
         this.asString(event.startToken ?? null) ||
         null;
@@ -4962,6 +6873,9 @@ export class DeviceGatewayService {
         )
           ? await this.updateDeviceCommand(matchedDeviceCommand, event, client)
           : null;
+      const upgradeTracking = await this.syncUpgradeTrackingFromEvent(event, matchedDeviceCommand, client);
+      const effectiveDispatchUpdate = dispatchUpdate ?? upgradeTracking?.commandDispatch ?? null;
+      const effectiveDeviceCommandUpdate = deviceCommandUpdate ?? upgradeTracking?.deviceCommand ?? null;
 
       if (!skipRuntimeIngest) {
         await this.runtimeIngestService.syncDerivedState(
@@ -5030,19 +6944,28 @@ export class DeviceGatewayService {
               status: session.status
             }
           : null,
-        command_dispatch: dispatchUpdate
+        command_dispatch: effectiveDispatchUpdate
           ? {
-              id: dispatchUpdate.id,
-              dispatch_status: dispatchUpdate.dispatchStatus,
-              acked_at: dispatchUpdate.ackedAt
+              id: effectiveDispatchUpdate.id,
+              dispatch_status: effectiveDispatchUpdate.dispatchStatus,
+              acked_at: effectiveDispatchUpdate.ackedAt
             }
           : null,
-        device_command: deviceCommandUpdate
+        device_command: effectiveDeviceCommandUpdate
           ? {
-              id: deviceCommandUpdate.id,
-              command_status: deviceCommandUpdate.commandStatus,
-              acked_at: deviceCommandUpdate.ackedAt,
-              failed_at: deviceCommandUpdate.failedAt
+              id: effectiveDeviceCommandUpdate.id,
+              command_status: effectiveDeviceCommandUpdate.commandStatus,
+              acked_at: effectiveDeviceCommandUpdate.ackedAt,
+              failed_at: effectiveDeviceCommandUpdate.failedAt
+            }
+          : null,
+        upgrade: upgradeTracking
+          ? {
+              job_item_id: upgradeTracking.jobItemId,
+              job_id: upgradeTracking.jobId,
+              status: upgradeTracking.status,
+              stage: upgradeTracking.stage,
+              progress_percent: upgradeTracking.progressPercent
             }
           : null,
         alarm: alarm ? { id: alarm.id } : null,
@@ -5066,7 +6989,16 @@ export class DeviceGatewayService {
               prompt_code: cardSwipeBridge.promptCode,
               error_code: cardSwipeBridge.errorCode,
               error_message: cardSwipeBridge.errorMessage,
-              queued_command_count: cardSwipeBridge.queuedCommandCount
+              queued_command_count: cardSwipeBridge.queuedCommandCount,
+              queued_command_tokens: cardSwipeBridge.queuedCommandTokens
+            }
+          : null,
+        card_audit_log: cardAuditLog
+          ? {
+              id: cardAuditLog.id,
+              event_code: cardAuditLog.eventCode,
+              audit_outcome: cardAuditLog.auditOutcome,
+              card_token_suffix: cardAuditLog.cardTokenSuffix
             }
           : null,
         auto_closed_work_orders: connectionRecovery.autoClosedOfflineWorkOrders.closedWorkOrderIds,
@@ -5087,6 +7019,18 @@ export class DeviceGatewayService {
           : null
       };
     });
+
+    const cardSwipe = this.asObject(this.asObject(result).card_swipe);
+    const queuedCommandTokens = this.asStringArray(cardSwipe.queued_command_tokens);
+    if (queuedCommandTokens.length > 0) {
+      const realtimeDelivery = await this.dispatchQueuedCommandTokensNow(queuedCommandTokens);
+      (result as Record<string, unknown>).card_swipe = {
+        ...cardSwipe,
+        realtime_delivery: realtimeDelivery
+      };
+    }
+
+    return result;
   }
 
   async getRuntimeShadow(imei: string) {
@@ -5251,6 +7195,10 @@ export class DeviceGatewayService {
     );
 
     const queuedDeviceCommand = insertedCommand.rows[0];
+    if (this.isUpgradeFirmwareCommand({ commandCode: normalizedCommandCode, requestPayload })) {
+      await this.closeSupersededUpgradeCommands(queuedDeviceCommand.imei, queuedDeviceCommand, client);
+    }
+
     const outboundWireMessage = this.buildWireCommandEnvelope({
       commandToken: queuedDeviceCommand.commandToken,
       commandCode: queuedDeviceCommand.commandCode,
@@ -5270,7 +7218,8 @@ export class DeviceGatewayService {
         direction: 'outbound',
         msgId: requestMsgId,
         seqNo: requestSeqNo,
-        msgType: outboundWireMessage?.t ? this.normalizeWireMsgType(outboundWireMessage.t) : normalizedCommandCode,
+        msgType:
+          this.normalizeWireMsgType(outboundWireMessage?.type || outboundWireMessage?.t) || normalizedCommandCode,
         eventType: 'PLATFORM_COMMAND_QUEUED',
         sessionRef,
         commandId: queuedDeviceCommand.id,
@@ -5423,6 +7372,23 @@ export class DeviceGatewayService {
     } satisfies RealtimeDispatchCandidate;
   }
 
+  async getRealtimeDispatchHold(commandToken: string, connectionId?: string | null) {
+    const candidate = await this.getRealtimeDispatchCandidate(commandToken);
+    if (!candidate) return null;
+
+    return this.db.withTransaction((client) =>
+      this.evaluateDispatchStabilizationWindow(
+        {
+          imei: candidate.imei,
+          connectionId: this.asString(connectionId) || null,
+          commandCode: candidate.commandCode,
+          requestPayload: candidate.requestPayload,
+        },
+        client
+      )
+    );
+  }
+
   private async markQueuedCommandsSentInClient(
     rows: Array<{ id: string; commandToken: string; commandStatus: string }>,
     client: PoolClient
@@ -5521,7 +7487,7 @@ export class DeviceGatewayService {
           direction: 'outbound',
           msgId: input.requestMsgId ?? null,
           seqNo: input.requestSeqNo ?? null,
-          msgType: this.normalizeWireMsgType(this.asString(input.wireMessage.t)) || input.commandCode,
+          msgType: this.normalizeWireMsgType(input.wireMessage.type || input.wireMessage.t) || input.commandCode,
           eventType: 'PLATFORM_COMMAND_SENT',
           sessionRef: input.sessionRef ?? null,
           commandId: input.commandId,
@@ -5541,7 +7507,7 @@ export class DeviceGatewayService {
   }
 
   async dispatchQuery(input: DispatchQueryInput) {
-    const queryCode = this.ensureSupportedQueryCode(input.query_code);
+    const queryCode = this.ensureSupportedQueryCode(input.qc ?? input.query_code);
     return this.queueCommand({
       target_device_id: this.asString(input.target_device_id) || undefined,
       imei: this.asString(input.imei) || undefined,
@@ -5556,33 +7522,117 @@ export class DeviceGatewayService {
           queryCode === 'query_electric_meter' ? null : this.asString(input.module_code) || null,
         module_instance_code: null,
         channel_code: null,
-        metric_codes: [],
+        metric_codes: this.asStringArray(input.metric_codes),
       },
       source: this.asString(input.source) || 'ops_device_gateway.query',
     });
   }
 
   async dispatchExecuteAction(input: DispatchExecuteActionInput) {
-    const actionCode = this.ensureSupportedActionCode(input.action_code);
+    const actionCode = this.ensureSupportedActionCode(input.ac ?? input.action_code);
     const requestPayload = this.asObject(input.payload);
-    return this.queueCommand({
-      target_device_id: this.asString(input.target_device_id) || undefined,
-      imei: this.asString(input.imei) || undefined,
-      session_id: this.asString(input.session_id) || null,
-      session_ref: this.asString(input.session_ref) || null,
-      order_id: this.asString(input.order_id) || null,
-      start_token: this.asString(input.start_token) || null,
-      command_code: 'EXECUTE_ACTION',
-      request_payload: {
-        ...requestPayload,
-        scope: this.resolveActionScope(actionCode, input.scope),
-        action_code: actionCode,
-        module_code: this.resolveActionModuleCode(actionCode, input.module_code),
-        module_instance_code: null,
-        channel_code: null,
-        target_ref: this.resolveActionTargetRef(actionCode, requestPayload, input.channel_code),
-      },
-      source: this.asString(input.source) || 'ops_device_gateway.execute',
+    const normalizedPayload = { ...requestPayload };
+    if (actionCode === 'upgrade_firmware') {
+      normalizedPayload.params = this.normalizeUpgradeFirmwareParams(requestPayload);
+    }
+
+    return this.db.withTransaction(async (client) => {
+      const device = this.asString(input.target_device_id)
+        ? await this.findDeviceById(this.asString(input.target_device_id), client)
+        : await this.findDeviceByImei(this.asString(input.imei), client);
+
+      if (!device) {
+        throw new AppException(ErrorCodes.TARGET_NOT_FOUND, 'Target device was not found', 404, {
+          target_device_id: input.target_device_id ?? null,
+          imei: input.imei ?? null,
+        });
+      }
+
+      const routedPlan =
+        actionCode === 'start_pump' || actionCode === 'stop_pump'
+          ? this.buildRoutedPumpExecutePlan({
+              actionCode,
+              payload: normalizedPayload,
+              requestedModuleCode: input.module_code,
+              channelCode: input.channel_code,
+              device,
+            })
+          : {
+              strategyKind: null,
+              routingMode: 'firmware_native',
+              fallbackReason: null,
+              logicalActionCode: actionCode,
+              steps: [
+                {
+                  actionCode,
+                  moduleCode: this.resolveActionModuleCode(actionCode, input.module_code),
+                  targetRef: this.resolveActionTargetRef(actionCode, normalizedPayload, input.channel_code),
+                  payload: normalizedPayload,
+                },
+              ],
+            } satisfies RoutedExecuteActionPlan;
+
+      const queuedCommands: Array<{ command: { id: string; command_token: string; command_code: string; command_status: string; imei: string; session_id: string | null; session_ref: string | null; start_token: string | null }; dispatch: { id: string; dispatch_status: string } | null }> = [];
+
+      for (const step of routedPlan.steps) {
+        const queued = await this.queueCommandInClient(
+          {
+            target_device_id: device.id,
+            imei: device.imei,
+            session_id: this.asString(input.session_id) || null,
+            session_ref: this.asString(input.session_ref) || null,
+            order_id: this.asString(input.order_id) || null,
+            start_token: this.asString(input.start_token) || null,
+            command_code: 'EXECUTE_ACTION',
+            request_payload: {
+              ...step.payload,
+              scope: this.resolveActionScope(step.actionCode, input.scope),
+              action_code: step.actionCode,
+              module_code: step.moduleCode ?? this.resolveActionModuleCode(step.actionCode, input.module_code),
+              module_instance_code: null,
+              channel_code: null,
+              target_ref: step.targetRef ?? this.resolveActionTargetRef(step.actionCode, step.payload, input.channel_code),
+            },
+            source: this.asString(input.source) || 'ops_device_gateway.execute',
+          },
+          client,
+        );
+
+        if (step.delayMs && step.delayMs > 0) {
+          await this.deferQueuedCommandForFollowup(
+            queued.command.id,
+            queued.command.command_token,
+            step.delayMs,
+            client,
+          );
+          queued.command.command_status = 'retry_pending';
+        }
+
+        queuedCommands.push(queued);
+      }
+
+      for (let index = 0; index < queuedCommands.length; index += 1) {
+        const step = routedPlan.steps[index];
+        const queued = queuedCommands[index];
+        if (step?.delayMs && step.delayMs > 0) {
+          void this.scheduleDelayedRealtimeDispatch(queued.command.command_token, step.delayMs);
+        }
+      }
+
+      const primary = queuedCommands[0];
+      const followups = queuedCommands.slice(1);
+
+      return {
+        ...primary,
+        queued_commands: followups.map((item) => item.command),
+        routing: {
+          logical_action_code: routedPlan.logicalActionCode,
+          strategy_kind: routedPlan.strategyKind,
+          routing_mode: routedPlan.routingMode,
+          fallback_reason: routedPlan.fallbackReason,
+          step_count: routedPlan.steps.length,
+        },
+      };
     });
   }
 
@@ -5605,6 +7655,7 @@ export class DeviceGatewayService {
         feature_modules: Array.isArray(input.feature_modules)
           ? input.feature_modules.map((item) => this.asString(item)).filter((item) => Boolean(item))
           : [],
+        control_config: this.asObject(input.control_config),
         channel_bindings: Array.isArray(input.channel_bindings) ? input.channel_bindings : [],
         runtime_rules: this.asObject(input.runtime_rules),
         resource_inventory: this.asObject(input.resource_inventory),
@@ -5676,12 +7727,27 @@ export class DeviceGatewayService {
         client
       );
 
-      if (markSent && result.rows.length > 0) {
-        await this.markQueuedCommandsSentInClient(result.rows, client);
+      const readyRows: Array<QueuedDeviceCommand & { deviceName: string | null }> = [];
+      for (const row of result.rows) {
+        const hold = await this.evaluateDispatchStabilizationWindow(
+          {
+            imei: row.imei,
+            commandCode: row.commandCode,
+            requestPayload: row.requestPayload,
+          },
+          client
+        );
+        if (!hold) {
+          readyRows.push(row);
+        }
+      }
+
+      if (markSent && readyRows.length > 0) {
+        await this.markQueuedCommandsSentInClient(readyRows, client);
       }
 
       return {
-        items: result.rows.map((row) => {
+        items: readyRows.map((row) => {
           const wireMessage = this.buildWireCommandEnvelope({
             commandToken: row.commandToken,
             commandCode: row.commandCode,
@@ -5715,6 +7781,9 @@ export class DeviceGatewayService {
           };
         }),
         total: result.rows.length,
+        transport_contract: 'sidecar_bridge_v1',
+        delivery_contract: 'platform_queue_only',
+        device_execution_queue: false,
         queue_mode: 'backend_command_queue',
         ack_endpoint: '/api/v1/ops/device-gateway/runtime-events'
       };
@@ -6114,6 +8183,7 @@ export class DeviceGatewayService {
 
   async getQueueHealth() {
     const timeoutSeconds = this.getSentTimeoutSeconds();
+    const upgradeTimeoutSeconds = this.getUpgradeAckTimeoutSeconds();
     const summary = await this.db.query<{
       created_count: number;
       sent_count: number;
@@ -6146,7 +8216,14 @@ export class DeviceGatewayService {
         count(*) filter (
           where command_status = 'sent'
             and sent_at is not null
-            and sent_at < now() - ($2::int * interval '1 second')
+            and sent_at < now() - (
+              case
+                when command_code = 'EXECUTE_ACTION'
+                  and lower(coalesce(request_payload_json->>'action_code', request_payload_json->>'actionCode', '')) = 'upgrade_firmware'
+                then $3::int
+                else $2::int
+              end * interval '1 second'
+            )
         )::int as timeout_overdue_count,
         min(created_at) filter (
           where command_status in ('created', 'sent', 'retry_pending', 'failed', 'dead_letter')
@@ -6159,7 +8236,7 @@ export class DeviceGatewayService {
       from device_command
       where tenant_id = $1
       `,
-      [TENANT_ID, timeoutSeconds]
+      [TENANT_ID, timeoutSeconds, upgradeTimeoutSeconds]
     );
 
     const row = summary.rows[0];
@@ -6527,7 +8604,8 @@ export class DeviceGatewayService {
           runtimeState: null,
           projectId: null,
           blockId: null,
-          sourceNodeCode: null
+          sourceNodeCode: null,
+          controlConfig: null,
         };
         const disconnectedAt = new Date().toISOString();
         const disconnectedCommandRecovery = await this.closeDisconnectedPendingControlCommands(item.imei, disconnectedAt, client);
@@ -6683,8 +8761,44 @@ export class DeviceGatewayService {
     );
   }
 
+  private async deferQueuedCommandForFollowup(
+    commandId: string,
+    commandToken: string,
+    delayMs: number,
+    client: PoolClient
+  ) {
+    const nextRetryAt = new Date(Date.now() + Math.max(1, Math.trunc(delayMs))).toISOString();
+    const transportPatch = {
+      retry_count: 0,
+      retry_delay_seconds: Number((Math.max(1, Math.trunc(delayMs)) / 1000).toFixed(3)),
+      next_retry_at: nextRetryAt,
+      last_transition: 'scheduled_followup',
+      scheduled_followup_at: nextRetryAt,
+      dead_letter_reason: null,
+    };
+
+    await this.db.query(
+      `
+      update device_command
+      set command_status = 'retry_pending',
+          sent_at = null,
+          acked_at = null,
+          failed_at = null,
+          timeout_at = null,
+          response_payload_json = coalesce(response_payload_json, '{}'::jsonb) || $2::jsonb,
+          updated_at = now()
+      where id = $1::uuid
+      `,
+      [commandId, JSON.stringify({ transport: transportPatch })],
+      client
+    );
+
+    await this.updateDispatchStatusByCommandToken(commandToken, 'retry_pending', transportPatch, client);
+  }
+
   async sweepRetries() {
     const policy = this.getTransportPolicy();
+    const minAckTimeoutSeconds = Math.min(policy.sent_timeout_seconds, policy.upgrade_ack_timeout_seconds);
 
     return this.db.withTransaction(async (client) => {
       const candidates = await this.db.query<DeviceCommandQueueRow>(
@@ -6713,7 +8827,7 @@ export class DeviceGatewayService {
         order by dc.sent_at asc
         limit 100
         `,
-        [TENANT_ID, policy.sent_timeout_seconds],
+        [TENANT_ID, minAckTimeoutSeconds],
         client
       );
 
@@ -6721,6 +8835,22 @@ export class DeviceGatewayService {
       let deadLettered = 0;
 
       for (const row of candidates.rows) {
+        const supersedingUpgradeCommand = await this.resolveSupersedingUpgradeCommand(row, client);
+        if (supersedingUpgradeCommand) {
+          await this.deadLetterSupersededUpgradeCommand(row, supersedingUpgradeCommand, client);
+          deadLettered += 1;
+          continue;
+        }
+
+        const sentAtMs = row.sentAt ? new Date(row.sentAt).getTime() : Number.NaN;
+        const ackTimeoutSeconds = this.getCommandAckTimeoutSeconds({
+          commandCode: row.commandCode,
+          requestPayload: row.requestPayload
+        });
+        if (Number.isFinite(sentAtMs) && sentAtMs + ackTimeoutSeconds * 1000 > Date.now()) {
+          continue;
+        }
+
         const synchronousStartCommand = this.isSynchronousStartCommand({
           commandCode: row.commandCode,
           requestPayload: row.requestPayload

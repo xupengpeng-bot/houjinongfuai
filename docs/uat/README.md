@@ -12,6 +12,8 @@ Audience: PM, Codex, Lovable, QA
 - `location-model-v1.md`
 - `domain-compat-mapping-v1.md`
 - `uat-plan-v1.md`
+- `payment-default-config-manual.md`
+- `payment-manual-source/`
 
 ## Archived files
 

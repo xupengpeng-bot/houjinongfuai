@@ -188,3 +188,49 @@
 | reason_code | 原因码 |
 | snapshot_json | 关键上下文 |
 | created_at | 事件时间 |
+
+## 11. 投资者关系状态机
+
+### 11.1 投资意向主状态流
+
+| 状态 | 含义 | 典型触发 |
+| --- | --- | --- |
+| submitted | 已提交待首触达 | 投资者在 `/i` 端提交意向 |
+| contacted | 已首轮联系 | 顾问认领并完成首轮回访 |
+| materials_shared | 已共享资料 | 发送项目资料室、月报、风险提示 |
+| meeting_scheduled | 已约见/已预约深聊 | 约定电话会、视频会或线下面谈 |
+| watchlist | 持续观察中 | 暂不推进，但保留后续触达 |
+| converted_offline | 已转线下正式流程 | 转入合规认购、法务或线下尽调流程 |
+| closed_lost | 已丢单 | 明确放弃、项目不匹配或超期失联 |
+| archived | 已归档 | 关闭后的历史留存 |
+
+### 11.2 转移动作与守卫条件
+
+| 从状态 | 动作 | 守卫条件 | 到状态 |
+| --- | --- | --- | --- |
+| submitted | advisor_claim | 联系方式完整且项目仍开放展示 | contacted |
+| contacted | share_materials | 完成首轮画像补充并允许发资料 | materials_shared |
+| materials_shared | schedule_meeting | 投资者确认进一步沟通 | meeting_scheduled |
+| meeting_scheduled | continue_nurture | 暂不进正式流程但值得跟进 | watchlist |
+| watchlist | reopen_followup | 有新动态或投资者重新响应 | contacted / materials_shared |
+| contacted / materials_shared / meeting_scheduled / watchlist | convert_offline | 需要进入合规认购或线下尽调流程 | converted_offline |
+| submitted / contacted / materials_shared / meeting_scheduled / watchlist | mark_lost | 明确拒绝、长期失联或不满足门槛 | closed_lost |
+| converted_offline / closed_lost | archive_case | 后续动作已结束，保留审计轨迹 | archived |
+
+### 11.3 原因码建议
+
+| reason_code | 含义 |
+| --- | --- |
+| CONTACT_INFO_INCOMPLETE | 联系方式或身份信息不足 |
+| PROJECT_NOT_OPEN | 项目当前不接受新增意向 |
+| MATERIALS_SHARED | 已完成资料发送 |
+| OFFLINE_DUE_DILIGENCE_STARTED | 已进入线下尽调/法务流程 |
+| INVESTOR_WITHDREW | 投资者主动撤回 |
+| NO_RESPONSE_TIMEOUT | 多轮跟进后超期未响应 |
+| RISK_MISMATCH | 风险偏好或门槛不匹配 |
+
+约束：
+
+- `converted_offline` 只表示离开投资者移动端 V1 进入后续正式流程，不等同于已创建认购订单。
+- 投资资料查看、下载、分享动作必须额外写入访问留痕，不能只改意向主状态。
+- 任意关闭类动作都必须带 `reason_code`，避免形成无法复盘的“死线索”。

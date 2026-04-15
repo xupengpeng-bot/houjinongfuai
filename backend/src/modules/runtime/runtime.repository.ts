@@ -8,6 +8,8 @@ import { RuntimeDecisionContract } from '../../common/contracts/runtime-decision
 export class RuntimeRepository {
   constructor(private readonly db: DatabaseService) {}
 
+  private readonly activeSessionStatuses = ['pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping'];
+
   private isUniqueViolation(error: unknown, constraintName: string) {
     const candidate = error as { code?: string; constraint?: string };
     return candidate?.code === '23505' && candidate?.constraint === constraintName;
@@ -30,14 +32,43 @@ export class RuntimeRepository {
     return result.rows[0] ?? null;
   }
 
+  async listSessionsNeedingProgressSweep(limit = 200, client?: PoolClient) {
+    const normalizedLimit = Math.min(1000, Math.max(1, Math.trunc(limit)));
+    const result = await this.db.query<{
+      sessionId: string;
+      sessionStatus: string;
+      pricingProgressAt: string | null;
+      orderId: string;
+      orderStatus: string;
+    }>(
+      `
+      select
+        rs.id::text as "sessionId",
+        rs.status as "sessionStatus",
+        io.pricing_progress_at as "pricingProgressAt",
+        io.id as "orderId",
+        io.status as "orderStatus"
+      from runtime_session rs
+      join irrigation_order io on io.session_id = rs.id
+      where rs.status in ('running', 'billing', 'pausing', 'paused', 'resuming', 'stopping')
+        and io.status <> 'settled'
+      order by io.pricing_progress_at asc nulls first, rs.updated_at asc
+      limit $1
+      `,
+      [normalizedLimit],
+      client
+    );
+    return result.rows;
+  }
+
   async countActiveSessionsForUser(userId: string, client?: PoolClient) {
     const result = await this.db.query<{ count: number }>(
       `
       select count(*)::int as count
       from runtime_session
-      where user_id = $1 and status in ('pending_start', 'running', 'billing', 'stopping')
+      where user_id = $1 and status = any($2::text[])
       `,
-      [userId],
+      [userId, this.activeSessionStatuses],
       client
     );
     return result.rows[0]?.count ?? 0;
@@ -48,9 +79,9 @@ export class RuntimeRepository {
       `
       select count(*)::int as count
       from runtime_session
-      where well_id = $1 and status in ('pending_start', 'running', 'billing', 'stopping')
+      where well_id = $1 and status = any($2::text[])
       `,
-      [wellId],
+      [wellId, this.activeSessionStatuses],
       client
     );
     return result.rows[0]?.count ?? 0;
@@ -61,12 +92,42 @@ export class RuntimeRepository {
       `
       select count(*)::int as count
       from runtime_session
-      where valve_id = $1 and status in ('pending_start', 'running', 'billing', 'stopping')
+      where valve_id = $1 and status = any($2::text[])
       `,
-      [valveId],
+      [valveId, this.activeSessionStatuses],
       client
     );
     return result.rows[0]?.count ?? 0;
+  }
+
+  async countActiveSessionsForPump(pumpId: string, client?: PoolClient) {
+    const result = await this.db.query<{ count: number }>(
+      `
+      select count(*)::int as count
+      from runtime_session
+      where pump_id = $1 and status = any($2::text[])
+      `,
+      [pumpId, this.activeSessionStatuses],
+      client
+    );
+    return result.rows[0]?.count ?? 0;
+  }
+
+  async listActiveBillingModesForPump(pumpId: string, client?: PoolClient) {
+    const result = await this.db.query<{ billingMode: string | null }>(
+      `
+      select distinct nullif(io.pricing_snapshot_json->>'mode', '') as "billingMode"
+      from runtime_session rs
+      join irrigation_order io on io.session_id = rs.id
+      where rs.pump_id = $1
+        and rs.status = any($2::text[])
+      `,
+      [pumpId, this.activeSessionStatuses],
+      client
+    );
+    return result.rows
+      .map((row) => row.billingMode?.trim() ?? '')
+      .filter((value) => value.length > 0);
   }
 
   async createDecision(input: {
@@ -117,7 +178,7 @@ export class RuntimeRepository {
       tenantId: string;
       userId: string;
       sceneCode: string;
-      targetType: 'valve' | 'well' | 'session';
+      targetType: 'valve' | 'well' | 'pump' | 'session';
       targetId: string;
       decisionResult: 'allow' | 'deny' | 'manual_review';
       effectiveRuleSnapshot: Record<string, unknown>;
@@ -164,7 +225,7 @@ export class RuntimeRepository {
         sessionNo: string;
         sessionRef: string | null;
         status: string;
-        startedAt: string;
+        startedAt: string | null;
       }>(
         `
         insert into runtime_session (
@@ -173,8 +234,8 @@ export class RuntimeRepository {
           started_at, telemetry_snapshot_json
         ) values (
           $1, $2, $3, $4, $5,
-          $6, $7, $8, $9, 'running', now(),
-          now(), $10::jsonb
+          $6, $7, $8, $9, 'pending_start', null,
+          null, $10::jsonb
         )
         returning id, session_no as "sessionNo", session_ref as "sessionRef", status, started_at as "startedAt"
         `,
@@ -277,6 +338,7 @@ export class RuntimeRepository {
     const result = await this.db.query<{
       id: string;
       sessionNo: string;
+      sessionRef: string | null;
       userId: string;
       userDisplayName: string | null;
       wellId: string;
@@ -290,14 +352,21 @@ export class RuntimeRepository {
       chargeVolume: number | null;
       orderStatus: string | null;
       settlementStatus: string | null;
+      paymentMode: string | null;
+      paymentStatus: string | null;
       billingPackageName: string | null;
       unitType: string | null;
       pricingDetail: Record<string, unknown> | null;
+      targetDeviceId: string | null;
+      targetImei: string | null;
+      targetDeviceRole: string | null;
+      targetDeviceName: string | null;
     }>(
       `
       select
         rs.id,
         rs.session_no as "sessionNo",
+        rs.session_ref as "sessionRef",
         rs.user_id as "userId",
         su.display_name as "userDisplayName",
         rs.well_id as "wellId",
@@ -311,20 +380,27 @@ export class RuntimeRepository {
         io.charge_volume as "chargeVolume",
         io.status as "orderStatus",
         io.settlement_status as "settlementStatus",
+        io.payment_mode as "paymentMode",
+        io.payment_status as "paymentStatus",
         bp.package_name as "billingPackageName",
         bp.unit_type as "unitType",
-        io.pricing_detail_json as "pricingDetail"
+        io.pricing_detail_json as "pricingDetail",
+        io.target_device_id::text as "targetDeviceId",
+        io.target_imei as "targetImei",
+        io.target_device_role as "targetDeviceRole",
+        td.device_name as "targetDeviceName"
       from runtime_session rs
       join sys_user su on su.id = rs.user_id
       join well w on w.id = rs.well_id
       left join irrigation_order io on io.session_id = rs.id
       left join billing_package bp on bp.id = io.billing_package_id
+      left join device td on td.id = io.target_device_id
       where rs.user_id = $1
-        and rs.status in ('pending_start', 'running', 'billing', 'stopping')
+        and rs.status = any($2::text[])
       order by rs.created_at desc
       limit 1
       `,
-      [userId],
+      [userId, this.activeSessionStatuses],
       client
     );
     return result.rows[0] ?? null;
@@ -419,14 +495,21 @@ export class RuntimeRepository {
       wellImei: string | null;
       wellDeviceCode: string | null;
       wellDeviceName: string | null;
+      wellFeatureModules: string[] | null;
+      wellDeviceState: string | null;
+      wellOnlineState: string | null;
       pumpDeviceId: string | null;
       pumpImei: string | null;
       pumpDeviceCode: string | null;
       pumpDeviceName: string | null;
+      pumpDeviceState: string | null;
+      pumpOnlineState: string | null;
       valveDeviceId: string | null;
       valveImei: string | null;
       valveDeviceCode: string | null;
       valveDeviceName: string | null;
+      valveDeviceState: string | null;
+      valveOnlineState: string | null;
     }>(
       `
       select
@@ -434,20 +517,45 @@ export class RuntimeRepository {
         wd.imei as "wellImei",
         wd.device_code as "wellDeviceCode",
         wd.device_name as "wellDeviceName",
+        coalesce(wd.ext_json->'feature_modules', '[]'::jsonb) as "wellFeatureModules",
+        wd.lifecycle_state as "wellDeviceState",
+        case
+          when wds.online_state = 'online'
+           and coalesce(wds.last_server_rx_ts, wds.last_heartbeat_at, wds.updated_at) >= now() - interval '15 minutes'
+            then 'online'
+          else wd.online_state
+        end as "wellOnlineState",
         pd.id as "pumpDeviceId",
         pd.imei as "pumpImei",
         pd.device_code as "pumpDeviceCode",
         pd.device_name as "pumpDeviceName",
+        pd.lifecycle_state as "pumpDeviceState",
+        case
+          when pds.online_state = 'online'
+           and coalesce(pds.last_server_rx_ts, pds.last_heartbeat_at, pds.updated_at) >= now() - interval '15 minutes'
+            then 'online'
+          else pd.online_state
+        end as "pumpOnlineState",
         vd.id as "valveDeviceId",
         vd.imei as "valveImei",
         vd.device_code as "valveDeviceCode",
-        vd.device_name as "valveDeviceName"
+        vd.device_name as "valveDeviceName",
+        vd.lifecycle_state as "valveDeviceState",
+        case
+          when vds.online_state = 'online'
+           and coalesce(vds.last_server_rx_ts, vds.last_heartbeat_at, vds.updated_at) >= now() - interval '15 minutes'
+            then 'online'
+          else vd.online_state
+        end as "valveOnlineState"
       from well w
       join pump p on p.id = $2
       join valve v on v.id = $3
       join device wd on wd.id = w.device_id
       join device pd on pd.id = p.device_id
       join device vd on vd.id = v.device_id
+      left join device_runtime_shadow wds on wds.device_id = wd.id
+      left join device_runtime_shadow pds on pds.device_id = pd.id
+      left join device_runtime_shadow vds on vds.device_id = vd.id
       where w.id = $1
       limit 1
       `,
@@ -645,7 +753,7 @@ export class RuntimeRepository {
     return result.rows[0] ?? null;
   }
 
-  async stopSession(sessionId: string, client: PoolClient) {
+  async stopSession(sessionId: string, client: PoolClient, endReasonCode = 'manual_stop_requested') {
     const result = await this.db.query<{
       id: string;
       tenantId: string;
@@ -659,8 +767,8 @@ export class RuntimeRepository {
     }>(
       `
       update runtime_session
-      set status = 'stopping', end_reason_code = 'manual_stop_requested', updated_at = now()
-      where id = $1 and status in ('pending_start', 'running', 'billing')
+      set status = 'stopping', end_reason_code = $2, updated_at = now()
+      where id = $1 and status in ('pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming')
       returning
         id,
         tenant_id as "tenantId",
@@ -672,7 +780,7 @@ export class RuntimeRepository {
         started_at as "startedAt",
         ended_at as "endedAt"
       `,
-      [sessionId],
+      [sessionId, endReasonCode],
       client
     );
     return result.rows[0] ?? null;

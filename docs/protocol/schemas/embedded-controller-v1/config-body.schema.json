@@ -1,0 +1,213 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "embedded-controller-v1/config-body.schema.json",
+  "title": "Embedded Controller Config Body",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "firmware_family",
+    "controller_role",
+    "feature_modules",
+    "resource_inventory",
+    "control_config",
+    "channel_bindings",
+    "runtime_rules"
+  ],
+  "properties": {
+    "firmware_family": {
+      "type": "string",
+      "enum": [
+        "FW_H2_UNIFIED",
+        "FW_H1_GATEWAY",
+        "FW_H3_VALVE_LITE",
+        "FW_H4_IO_MONITOR"
+      ]
+    },
+    "controller_role": {
+      "type": "string",
+      "enum": [
+        "water_source_controller",
+        "valve_controller",
+        "monitor_controller"
+      ]
+    },
+    "feature_modules": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "enum": [
+          "pump_vfd_control",
+          "pump_direct_control",
+          "single_valve_control",
+          "pressure_acquisition",
+          "flow_acquisition",
+          "level_acquisition",
+          "soil_moisture_acquisition",
+          "soil_temperature_acquisition",
+          "power_monitoring",
+          "rs485_sensor_gateway",
+          "rs485_vfd_gateway",
+          "valve_feedback_monitor",
+          "pump_fault_feedback",
+          "remote_start_enable",
+          "auto_linkage_enable",
+          "auto_stop_on_low_pressure",
+          "auto_stop_on_high_pressure"
+        ]
+      },
+      "uniqueItems": true
+    },
+    "resource_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "relay_output": { "type": "integer", "minimum": 0 },
+        "motor_driver": { "type": "integer", "minimum": 0 },
+        "digital_input": { "type": "integer", "minimum": 0 },
+        "analog_input": { "type": "integer", "minimum": 0 },
+        "pulse_input": { "type": "integer", "minimum": 0 },
+        "rs485_modbus": { "type": "integer", "minimum": 0 },
+        "power_monitor": { "type": "integer", "minimum": 0 }
+      }
+    },
+    "control_config": {
+      "type": "object",
+      "additionalProperties": true,
+      "properties": {
+        "pump_control_mode": {
+          "type": "string",
+          "enum": ["meter_breaker_485", "relay_direct", "contactor_direct"]
+        },
+        "pump_strategy_kind": {
+          "type": "string",
+          "enum": ["meter_breaker_modbus", "single_relay_follow", "dual_relay_pulse"]
+        },
+        "logical_target": { "type": "string", "minLength": 1 },
+        "start_binding": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "kind": { "type": "string" },
+            "target": { "type": "string" },
+            "command": { "type": "string" },
+            "pulse_ms": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "stop_binding": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "kind": { "type": "string" },
+            "target": { "type": "string" },
+            "command": { "type": "string" },
+            "pulse_ms": { "type": "integer", "minimum": 1 }
+          }
+        },
+        "feedback_binding": {
+          "type": "object",
+          "additionalProperties": true,
+          "properties": {
+            "kind": { "type": "string" },
+            "target": { "type": "string" },
+            "metric_code": { "type": "string" }
+          }
+        }
+      }
+    },
+    "channel_bindings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "channel_code",
+          "channel_role",
+          "channel_type",
+          "io_kind",
+          "enabled",
+          "bind_target_code"
+        ],
+        "properties": {
+          "channel_code": { "type": "string" },
+          "channel_role": {
+            "type": "string",
+            "enum": [
+              "pump_run",
+              "pump_stop",
+              "vfd_run",
+              "vfd_setpoint",
+              "valve_open",
+              "valve_close",
+              "valve_feedback",
+              "pressure_sensor",
+              "flow_sensor",
+              "level_sensor",
+              "soil_moisture_sensor",
+              "soil_temperature_sensor",
+              "power_sensor",
+              "alarm_input",
+              "status_feedback",
+              "reserved"
+            ]
+          },
+          "channel_type": {
+            "type": "string",
+            "enum": ["actuator", "sensor", "feedback", "bus", "power"]
+          },
+          "io_kind": {
+            "type": "string",
+            "enum": [
+              "relay_output",
+              "motor_driver",
+              "digital_input",
+              "analog_input",
+              "pulse_input",
+              "rs485_modbus",
+              "power_monitor"
+            ]
+          },
+          "enabled": { "type": "boolean" },
+          "bind_target_code": { "type": "string", "minLength": 1 },
+          "unit": { "type": "string" },
+          "sample_interval_sec": { "type": "integer", "minimum": 1 },
+          "value_scale": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "raw_min": { "type": "number" },
+              "raw_max": { "type": "number" },
+              "engineering_min": { "type": "number" },
+              "engineering_max": { "type": "number" }
+            }
+          },
+          "pulse_scale": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "pulse_per_m3": { "type": "number", "exclusiveMinimum": 0 }
+            }
+          },
+          "protocol": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        }
+      }
+    },
+    "runtime_rules": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "heartbeat_interval_sec": { "type": "integer", "minimum": 5 },
+        "snapshot_idle_interval_sec": { "type": "integer", "minimum": 5 },
+        "snapshot_running_interval_sec": { "type": "integer", "minimum": 1 },
+        "runtime_tick_interval_sec": { "type": "integer", "minimum": 5 },
+        "control_timeout_sec": { "type": "integer", "minimum": 1 },
+        "thresholds": {
+          "type": "object",
+          "additionalProperties": true
+        }
+      }
+    }
+  }
+}

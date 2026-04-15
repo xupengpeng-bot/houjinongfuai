@@ -1,0 +1,59 @@
+{
+  "v": 1,
+  "t": "SC",
+  "i": "860000000000002",
+  "m": "cfg-0301",
+  "s": 301,
+  "ts": "2026-04-07T13:20:00Z",
+  "c": "CFG-20260407-0301",
+  "p": {
+    "cv": 3,
+    "ff": "FW_H2_UNIFIED",
+    "fm": [
+      "svl",
+      "vfb",
+      "sma",
+      "sta"
+    ],
+    "ri": {
+      "relay_output": 2,
+      "motor_driver": 2,
+      "digital_input": 2,
+      "analog_input": 2,
+      "pulse_input": 1,
+      "rs485_modbus": 1,
+      "power_monitor": 1
+    },
+    "cb": [
+      {
+        "channel_code": "valve_1",
+        "module_code": "single_valve_control",
+        "io_kind": "relay_output",
+        "enabled": true
+      },
+      {
+        "channel_code": "valve_feedback_1",
+        "module_code": "valve_feedback_monitor",
+        "io_kind": "digital_input",
+        "enabled": true
+      },
+      {
+        "channel_code": "soil_bus_1",
+        "module_code": "soil_moisture_acquisition",
+        "io_kind": "rs485_modbus",
+        "enabled": true,
+        "protocol": {
+          "slave_id": 1,
+          "baud_rate": 9600
+        }
+      }
+    ],
+    "rr": {
+      "heartbeat_interval_sec": 60,
+      "snapshot_idle_interval_sec": 300,
+      "snapshot_running_interval_sec": 30,
+      "runtime_tick_interval_sec": 30,
+      "control_timeout_sec": 20
+    }
+  }
+}

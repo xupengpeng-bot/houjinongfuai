@@ -1,16 +1,20 @@
 import { Injectable } from '@nestjs/common';
 import { AppException } from '../../common/errors/app-exception';
 import { ErrorCodes } from '../../common/errors/error-codes';
+import { BillingSubjectPolicyService, type BillingSubjectType } from '../billing/billing-subject-policy.service';
 import { EffectivePolicy } from './policy.dto';
 import { PolicyRepository } from './policy.repository';
 
 export const FIXED_PRIORITY_CHAIN = [
+  'billing_subject_policy',
   'well_runtime_policy',
   'pump_valve_relation',
   'interaction_policy',
   'scenario_template',
   'device_type_default'
 ] as const;
+
+type PrioritySource = (typeof FIXED_PRIORITY_CHAIN)[number];
 
 type ResolvedFieldMap = {
   billingPackageId?: string;
@@ -25,7 +29,10 @@ type ResolvedFieldMap = {
 
 @Injectable()
 export class EffectivePolicyResolver {
-  constructor(private readonly policyRepository: PolicyRepository) {}
+  constructor(
+    private readonly policyRepository: PolicyRepository,
+    private readonly billingSubjectPolicyService: BillingSubjectPolicyService
+  ) {}
 
   async resolveForRuntime(input: {
     wellId: string;
@@ -61,6 +68,17 @@ export class EffectivePolicyResolver {
 
     const scenarioTemplate = await this.policyRepository.findScenarioTemplate(relation.tenantId, templateCode ?? null, 'well');
     const scenarioDefaults = this.extractRuntimeDefaults(scenarioTemplate?.templateConfigJson ?? null);
+    const targetSubjectType = this.resolveTargetSubjectType(input.targetType);
+    const targetSubjectId = this.resolveTargetSubjectId(targetSubjectType, input);
+    const targetSubjectPolicy = await this.billingSubjectPolicyService.findActivePolicy(
+      relation.tenantId,
+      targetSubjectType,
+      targetSubjectId
+    );
+    const wellSubjectPolicy =
+      targetSubjectType === 'well'
+        ? targetSubjectPolicy
+        : await this.billingSubjectPolicyService.findActivePolicy(relation.tenantId, 'well', input.wellId);
 
     const resolved: ResolvedFieldMap = {};
     const resolvedFrom: EffectivePolicy['resolved_from'] = {};
@@ -82,6 +100,28 @@ export class EffectivePolicyResolver {
         concurrencyLimit: wellPolicy.concurrencyLimit,
         stopProtectionMode: wellPolicy.stopProtectionMode
       });
+    }
+
+    if (wellSubjectPolicy) {
+      this.assignField(
+        resolved,
+        resolvedFrom,
+        'billingPackageId',
+        wellSubjectPolicy.billingPackageId,
+        'billing_package_source',
+        'billing_subject_policy'
+      );
+    }
+
+    if (targetSubjectPolicy && targetSubjectPolicy.subjectId !== wellSubjectPolicy?.subjectId) {
+      this.assignField(
+        resolved,
+        resolvedFrom,
+        'billingPackageId',
+        targetSubjectPolicy.billingPackageId,
+        'billing_package_source',
+        'billing_subject_policy'
+      );
     }
 
     if (!resolved.billingPackageId || resolved.maxRunSeconds === undefined || resolved.concurrencyLimit === undefined) {
@@ -116,6 +156,7 @@ export class EffectivePolicyResolver {
     return {
       priorityChain: [...FIXED_PRIORITY_CHAIN],
       sourceIds: {
+        billingSubjectPolicyId: targetSubjectPolicy?.id ?? wellSubjectPolicy?.id,
         policyId: wellPolicy?.id,
         relationId: input.relationId,
         interactionPolicyId: interactionPolicy?.id,
@@ -139,13 +180,15 @@ export class EffectivePolicyResolver {
         billingMode: billingPackage.billingMode,
         unitPrice: Number(billingPackage.unitPrice ?? 0),
         unitType: billingPackage.unitType,
-        minChargeAmount: Number(billingPackage.minChargeAmount ?? 0)
+        minChargeAmount: Number(billingPackage.minChargeAmount ?? 0),
+        pricingRules: billingPackage.pricingRules ?? {}
       },
       interaction: {
         confirmMode: String(resolved.confirmMode ?? interactionPolicy?.confirmMode ?? 'single_confirm')
       },
       resolved_from: resolvedFrom,
       raw: {
+        billingSubjectPolicy: targetSubjectPolicy ?? wellSubjectPolicy ?? null,
         wellRuntimePolicy: wellPolicy,
         relationConfig: relation.relationConfigJson,
         interactionPolicy,
@@ -159,7 +202,7 @@ export class EffectivePolicyResolver {
   private applyResolvedFields(
     target: ResolvedFieldMap,
     resolvedFrom: EffectivePolicy['resolved_from'],
-    sourceName: (typeof FIXED_PRIORITY_CHAIN)[number],
+    sourceName: PrioritySource,
     values: Record<string, unknown>
   ) {
     this.assignField(target, resolvedFrom, 'billingPackageId', values.billingPackageId, 'billing_package_source', sourceName);
@@ -178,7 +221,7 @@ export class EffectivePolicyResolver {
     field: K,
     rawValue: unknown,
     sourceField: keyof EffectivePolicy['resolved_from'],
-    sourceName: (typeof FIXED_PRIORITY_CHAIN)[number],
+    sourceName: PrioritySource,
     transform?: (value: unknown) => unknown
   ) {
     if (rawValue === undefined || rawValue === null || rawValue === '') {
@@ -227,5 +270,20 @@ export class EffectivePolicyResolver {
 
   private firstDefined<T>(...values: Array<T | undefined>): T | undefined {
     return values.find((value) => value !== undefined);
+  }
+
+  private resolveTargetSubjectType(targetType: string): BillingSubjectType {
+    if (targetType === 'pump') return 'pump';
+    if (targetType === 'valve') return 'valve';
+    return 'well';
+  }
+
+  private resolveTargetSubjectId(
+    targetSubjectType: BillingSubjectType,
+    input: { wellId: string; pumpId: string; valveId: string }
+  ) {
+    if (targetSubjectType === 'pump') return input.pumpId;
+    if (targetSubjectType === 'valve') return input.valveId;
+    return input.wellId;
   }
 }

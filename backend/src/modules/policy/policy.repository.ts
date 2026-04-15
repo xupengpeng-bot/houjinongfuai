@@ -358,6 +358,7 @@ export class PolicyRepository {
       unitPrice: number;
       unitType: string;
       minChargeAmount: number;
+      pricingRules: Record<string, unknown>;
       status: string;
     }>(
       `
@@ -369,6 +370,7 @@ export class PolicyRepository {
         unit_price as "unitPrice",
         unit_type as "unitType",
         min_charge_amount as "minChargeAmount",
+        pricing_rules_json as "pricingRules",
         status
       from billing_package
       where id = $1 and status = 'active'

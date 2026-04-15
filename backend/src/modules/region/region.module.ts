@@ -187,6 +187,35 @@ class RegionController {
     return result.rows;
   }
 
+  private async listAdministrativeRegionOptions() {
+    const result = await this.db.query<FlatRegionNode>(`
+      select
+        rr.code as id,
+        rr.parent_code as parent_id,
+        rr.code as value,
+        rr.name as label,
+        rr.code as code,
+        rr.name as name,
+        case
+          when rr.level = 'province' then 'province'
+          when rr.level = 'city' then 'city'
+          when rr.level = 'county' then 'county'
+          when rr.level = 'town' then 'town'
+          when rr.level = 'village' then 'village'
+          else 'county'
+        end as level,
+        rr.full_path_name,
+        rr.full_path_code,
+        rr.enabled
+      from region_reference rr
+      where rr.enabled = true
+        and rr.level in ('province', 'city', 'county')
+      order by rr.full_path_code asc
+    `);
+
+    return result.rows;
+  }
+
   private async getCanonicalRegionById(id: string, client?: PoolClient) {
     const result = await this.db.query<FlatRegionNode>(
       `
@@ -251,13 +280,19 @@ class RegionController {
 
   @Get('options')
   async options() {
+    const items = await this.listAdministrativeRegionOptions();
+    return ok({ items });
+  }
+
+  @Get('business-options')
+  async businessOptions() {
     const items = await this.listCanonicalRegions();
     return ok({ items });
   }
 
   @Get('cascade-options')
   async cascadeOptions() {
-    const items = await this.listCanonicalRegions();
+    const items = await this.listAdministrativeRegionOptions();
     return ok({ items: buildCascadeTree(items) });
   }
 
@@ -346,7 +381,7 @@ class RegionController {
         (
           select count(*)::int
           from asset a
-          where a.manual_region_id = rt.id
+          where nullif(a.manual_region_id, '') = rt.id::text
         ) as assets,
         (rt.status = 'active') as enabled
       from region_tree rt

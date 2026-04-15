@@ -19,14 +19,15 @@
 2. [Phase 1 优先主流程就绪度 v1](/D:/Develop/houji/houjinongfuai/docs/requirements/phase1-priority-flow-readiness-v1.md)
 3. [Phase 1 全链路就绪度审计 v5](/D:/Develop/houji/houjinongfuai/docs/requirements/phase1-full-chain-readiness-audit-v5.md)
 4. [Phase 1 用户流优化包 v4](/D:/Develop/houji/houjinongfuai/docs/requirements/phase1-user-flow-optimization-v4.md)
-5. [系统业务总览简版](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统业务总览简版.md)
-6. [系统整体业务需求](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统整体业务需求.md)
-7. [骨架冻结与开发分期](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/骨架冻结与开发分期.md)
-8. [需求拆解](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/需求拆解.md)
-9. [Phase 1 研发基线](/D:/20251211/zhinengti/houjinongfuai/docs/p1/README.md)
-10. [设备协议](/D:/20251211/zhinengti/houjinongfuai/docs/protocol/device-protocol-v1.md)
-11. [设备事件模型](/D:/20251211/zhinengti/houjinongfuai/docs/protocol/device-event-model-v1.md)
-12. [UAT 活跃文档](/D:/20251211/zhinengti/houjinongfuai/docs/uat/README.md)
+5. [Phase 1 投资者移动端 V1 后端补齐包](./phase1-investor-mobile-v1.md)
+6. [系统业务总览简版](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统业务总览简版.md)
+7. [系统整体业务需求](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统整体业务需求.md)
+8. [骨架冻结与开发分期](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/骨架冻结与开发分期.md)
+9. [需求拆解](/D:/20251211/zhinengti/houjinongfuai/docs/系统说明/需求拆解.md)
+10. [Phase 1 研发基线](/D:/20251211/zhinengti/houjinongfuai/docs/p1/README.md)
+11. [设备协议](/D:/20251211/zhinengti/houjinongfuai/docs/protocol/device-protocol-v1.md)
+12. [设备事件模型](/D:/20251211/zhinengti/houjinongfuai/docs/protocol/device-event-model-v1.md)
+13. [UAT 活跃文档](/D:/20251211/zhinengti/houjinongfuai/docs/uat/README.md)
 
 ## 使用规则
 

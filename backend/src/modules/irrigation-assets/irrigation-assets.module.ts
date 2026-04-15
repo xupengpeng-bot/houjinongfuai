@@ -19,7 +19,7 @@ import { DatabaseService } from '../../common/db/database.service';
 import { ok } from '../../common/http/api-response';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
-const RUNNING_SESSION_STATUSES = ['pending_start', 'running', 'billing', 'stopping'];
+const RUNNING_SESSION_STATUSES = ['pending_start', 'running', 'billing', 'pausing', 'paused', 'resuming', 'stopping'];
 
 interface WellPayload {
   name?: string;

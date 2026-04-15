@@ -5,8 +5,8 @@ import { OrderRepository } from './order.repository';
 export class OrderService {
   constructor(private readonly orderRepository: OrderRepository) {}
 
-  listOrders() {
-    return this.orderRepository.findAll();
+  listOrdersPage(params?: { page?: number; pageSize?: number; targetImei?: string | null }) {
+    return this.orderRepository.findPage(params);
   }
 
   getOrder(id: string) {

@@ -20,17 +20,23 @@ except Exception as exc:  # pragma: no cover
 
 
 ENVELOPE_KEYS = {
+    "protocol",
     "protocolVersion",
     "protocol_version",
     "imei",
     "msgId",
     "msg_id",
+    "seq",
     "seqNo",
     "seq_no",
+    "type",
     "msgType",
     "msg_type",
+    "ts",
     "deviceTs",
     "device_ts",
+    "correlationId",
+    "correlation_id",
     "sessionRef",
     "session_ref",
     "runState",
@@ -55,11 +61,12 @@ REVERSE_EVENT_TYPE_MAP = {
     "DEVICE_REGISTERED": "REGISTERED",
     "DEVICE_HEARTBEAT": "HEARTBEAT",
     "DEVICE_STATE_SNAPSHOT": "STATE_SNAPSHOT",
+    "DEVICE_QUERY_RESULT": "QUERY_RESULT",
     "DEVICE_RUNTIME_TICK": "RUNTIME_TICK",
     "DEVICE_RUNTIME_STOPPED": "RUNTIME_STOPPED",
-    "DEVICE_ALARM_RAISED": "ALARM",
+    "DEVICE_ALARM_RAISED": "EVENT_REPORT",
     "DEVICE_COMMAND_ACKED": "COMMAND_ACK",
-    "DEVICE_COMMAND_NACKED": "COMMAND_ACK",
+    "DEVICE_COMMAND_NACKED": "COMMAND_NACK",
 }
 
 IGNORED_INBOUND_MSG_TYPES = {"COMMAND_DISPATCH", "PULL_PENDING_COMMANDS"}
@@ -155,7 +162,7 @@ class SerialGatewayBridge:
             self.serial_port.close()
 
     def _normalize_msg_type(self, frame: dict[str, Any]) -> str:
-        candidate = frame.get("msgType") or frame.get("msg_type")
+        candidate = frame.get("type") or frame.get("msgType") or frame.get("msg_type")
         if isinstance(candidate, str) and candidate.strip():
             return candidate.strip().upper()
         event_type = frame.get("eventType") or frame.get("event_type")
@@ -171,19 +178,20 @@ class SerialGatewayBridge:
 
     def _build_envelope(self, frame: dict[str, Any]) -> dict[str, Any]:
         return {
-            "protocolVersion": frame.get("protocolVersion") or frame.get("protocol_version") or self.args.protocol_version,
+            "protocol": frame.get("protocol") or frame.get("protocolVersion") or frame.get("protocol_version") or self.args.protocol_version,
             "imei": frame.get("imei") or self.args.imei,
-            "msgId": frame.get("msgId") or frame.get("msg_id") or str(uuid.uuid4()),
-            "seqNo": frame.get("seqNo") or frame.get("seq_no") or self._next_seq(),
-            "msgType": self._normalize_msg_type(frame),
-            "deviceTs": frame.get("deviceTs") or frame.get("device_ts") or now_iso(),
-            "sessionRef": frame.get("sessionRef") or frame.get("session_ref") or self.args.session_ref,
-            "runState": frame.get("runState") or frame.get("run_state"),
-            "powerState": frame.get("powerState") or frame.get("power_state"),
-            "alarmCodes": frame.get("alarmCodes") or frame.get("alarm_codes") or [],
-            "cumulativeRuntimeSec": frame.get("cumulativeRuntimeSec") or frame.get("cumulative_runtime_sec"),
-            "cumulativeEnergyWh": frame.get("cumulativeEnergyWh") or frame.get("cumulative_energy_wh"),
-            "cumulativeFlow": frame.get("cumulativeFlow") or frame.get("cumulative_flow"),
+            "msg_id": frame.get("msgId") or frame.get("msg_id") or str(uuid.uuid4()),
+            "seq": frame.get("seq") or frame.get("seqNo") or frame.get("seq_no") or self._next_seq(),
+            "type": self._normalize_msg_type(frame),
+            "ts": frame.get("ts") or frame.get("deviceTs") or frame.get("device_ts") or now_iso(),
+            "correlation_id": frame.get("correlationId") or frame.get("correlation_id"),
+            "session_ref": frame.get("sessionRef") or frame.get("session_ref") or self.args.session_ref,
+            "run_state": frame.get("runState") or frame.get("run_state"),
+            "power_state": frame.get("powerState") or frame.get("power_state"),
+            "alarm_codes": frame.get("alarmCodes") or frame.get("alarm_codes") or [],
+            "cumulative_runtime_sec": frame.get("cumulativeRuntimeSec") or frame.get("cumulative_runtime_sec"),
+            "cumulative_energy_wh": frame.get("cumulativeEnergyWh") or frame.get("cumulative_energy_wh"),
+            "cumulative_flow": frame.get("cumulativeFlow") or frame.get("cumulative_flow"),
             "payload": self._build_payload(frame),
             "integrity": frame.get("integrity"),
         }
@@ -240,16 +248,21 @@ class SerialGatewayBridge:
         if not commands or self.serial_port is None:
             return
         for command in commands:
-            outbound = {
-                "msgType": "COMMAND_DISPATCH",
-                "bridge_origin": "backend_serial_bridge",
-                "commandToken": command.get("command_token"),
-                "commandCode": command.get("command_code"),
-                "imei": command.get("imei"),
-                "sessionRef": command.get("session_ref"),
-                "startToken": command.get("start_token"),
-                "payload": command.get("request_payload") or {},
-            }
+            wire_message = command.get("wire_message")
+            if isinstance(wire_message, dict):
+                outbound = dict(wire_message)
+            else:
+                outbound = {
+                    "protocol": self.args.protocol_version,
+                    "type": command.get("command_code"),
+                    "imei": command.get("imei"),
+                    "msg_id": command.get("request_msg_id") or str(uuid.uuid4()),
+                    "seq": command.get("request_seq_no") or self._next_seq(),
+                    "correlation_id": command.get("command_token"),
+                    "session_ref": command.get("session_ref"),
+                    "payload": command.get("request_payload") or {},
+                }
+            outbound["bridge_origin"] = "backend_serial_bridge"
             self.serial_port.write((json.dumps(outbound, ensure_ascii=False) + "\n").encode("utf-8"))
 
     def read_frame(self) -> dict[str, Any] | None:
@@ -319,7 +332,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Backend device-gateway base URL",
     )
     parser.add_argument("--bridge-id", default=None, help="Optional bridge id override")
-    parser.add_argument("--protocol-version", default="serial-json-v1", help="Bridge protocol version")
+    parser.add_argument("--protocol-version", default="hj-device-v2", help="Bridge protocol version")
     parser.add_argument("--session-ref", default=None, help="Optional sessionRef override")
     parser.add_argument("--heartbeat-interval-seconds", type=float, default=15.0, help="Heartbeat interval")
     parser.add_argument("--read-timeout", type=float, default=0.5, help="Serial read timeout in seconds")

@@ -7,10 +7,10 @@ COMMENT ON COLUMN network_model_version.published_at IS
   'When this version was marked published; NULL when draft or after unpublish.';
 
 COMMENT ON COLUMN network_model_version.is_published IS
-  'At most one row per network_model_id may be true (enforced by partial unique index).';
+  'Marks the current published version for a scope; later migrations refine uniqueness to block scope.';
 
--- One published version per hydraulic model header.
-CREATE UNIQUE INDEX IF NOT EXISTS uq_network_model_version_one_published_per_model
+-- Transitional lookup index; block-scoped uniqueness is enforced by later migrations.
+CREATE INDEX IF NOT EXISTS uq_network_model_version_one_published_per_model
   ON network_model_version (network_model_id)
   WHERE is_published = true;
 

@@ -63,6 +63,7 @@ export interface RelationContext {
   relationRole: string;
   billingInheritMode: string;
   relationConfigJson: Record<string, unknown>;
+  wellFeatureModules?: string[] | null;
   wellDeviceState: string;
   pumpDeviceState: string;
   valveDeviceState: string;
@@ -74,4 +75,16 @@ export interface RelationContext {
 export interface RelationValidationResult {
   relation: RelationContext | null;
   blockingReasons: BlockingReason[];
+}
+
+export interface PrimaryMeteringReadiness {
+  blockId: string | null;
+  blockName: string | null;
+  meteringPointId: string | null;
+  meteringPointCode: string | null;
+  meteringPointStatus: string | null;
+  primaryMeterDeviceId: string | null;
+  primaryMeterDeviceName: string | null;
+  primaryMeterLifecycleState: string | null;
+  primaryMeterOnlineState: string | null;
 }

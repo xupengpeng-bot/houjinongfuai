@@ -1,0 +1,116 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "embedded-controller-v1/register-payload.schema.json",
+  "title": "Embedded Controller Register Payload",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "hardware_sku",
+    "hardware_rev",
+    "firmware_family",
+    "firmware_version",
+    "controller_role",
+    "config_version",
+    "feature_modules",
+    "capability_version",
+    "capability_hash",
+    "config_bitmap",
+    "actions_bitmap",
+    "queries_bitmap",
+    "limits",
+    "resource_inventory"
+  ],
+  "properties": {
+    "hardware_sku": {
+      "type": "string",
+      "enum": ["H2", "H1", "H3", "H4"]
+    },
+    "hardware_rev": {
+      "type": "string",
+      "minLength": 1
+    },
+    "firmware_family": {
+      "type": "string",
+      "enum": [
+        "FW_H2_UNIFIED",
+        "FW_H1_GATEWAY",
+        "FW_H3_VALVE_LITE",
+        "FW_H4_IO_MONITOR"
+      ]
+    },
+    "firmware_version": {
+      "type": "string",
+      "minLength": 1
+    },
+    "controller_role": {
+      "type": "string",
+      "enum": [
+        "water_source_controller",
+        "valve_controller",
+        "monitor_controller"
+      ]
+    },
+    "deployment_mode": {
+      "type": "string",
+      "enum": ["standalone", "station_child"]
+    },
+    "config_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "capability_version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "capability_hash": {
+      "type": "string",
+      "minLength": 1
+    },
+    "feature_modules": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      },
+      "uniqueItems": true
+    },
+    "config_bitmap": {
+      "type": "string",
+      "minLength": 1
+    },
+    "actions_bitmap": {
+      "type": "string",
+      "minLength": 1
+    },
+    "queries_bitmap": {
+      "type": "string",
+      "minLength": 1
+    },
+    "limits": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "max_inflight_control",
+        "event_queue_depth",
+        "ota_block_bytes"
+      ],
+      "properties": {
+        "max_inflight_control": { "type": "integer", "minimum": 1 },
+        "event_queue_depth": { "type": "integer", "minimum": 1 },
+        "ota_block_bytes": { "type": "integer", "minimum": 128 }
+      }
+    },
+    "resource_inventory": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "relay_output": { "type": "integer", "minimum": 0 },
+        "motor_driver": { "type": "integer", "minimum": 0 },
+        "digital_input": { "type": "integer", "minimum": 0 },
+        "analog_input": { "type": "integer", "minimum": 0 },
+        "pulse_input": { "type": "integer", "minimum": 0 },
+        "rs485_modbus": { "type": "integer", "minimum": 0 },
+        "power_monitor": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

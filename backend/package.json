@@ -26,6 +26,7 @@
     "testdata:cleanup": "ts-node ./scripts/cleanup-test-data.ts",
     "region-reference:import": "ts-node ./scripts/import-region-reference.ts",
     "region-reference:verify": "ts-node ./scripts/verify-region-reference.ts",
+    "ota:device": "ts-node ./scripts/ota-upgrade-device.ts",
     "test:e2e": "jest --config ./test/jest-e2e.json --runInBand",
     "test:unit": "jest --config ./test/jest-unit.json --runInBand"
   },

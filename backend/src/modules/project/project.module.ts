@@ -15,6 +15,7 @@ import {
 } from '@nestjs/common';
 import { PoolClient } from 'pg';
 import { DatabaseService } from '../../common/db/database.service';
+import { RegionCompatService } from '../../common/region/region-compat.service';
 
 const TENANT_ID = '00000000-0000-0000-0000-000000000001';
 const PROJECT_STATUSES = ['draft', 'active', 'archived'] as const;
@@ -57,7 +58,6 @@ interface ProjectOption {
 interface CreateProjectDto {
   project_name?: string;
   region_id?: string;
-  manual_region_id?: string | null;
   maintenance_team_id?: string | null;
   status?: ProjectStatus;
   owner?: string;
@@ -69,7 +69,6 @@ interface CreateProjectDto {
 interface UpdateProjectDto {
   project_code?: string;
   region_id?: string;
-  manual_region_id?: string | null;
   maintenance_team_id?: string | null;
   project_name?: string;
   status?: ProjectStatus;
@@ -77,6 +76,10 @@ interface UpdateProjectDto {
   contact_phone?: string;
   operator?: string;
   remarks?: string;
+}
+
+interface ResolvedProjectRegion {
+  id: string;
 }
 
 function appException(status: HttpStatus, code: string, message: string, data: Record<string, unknown> = {}) {
@@ -111,7 +114,10 @@ function validateContactPhone(value: string) {
 
 @Injectable()
 class ProjectService {
-  constructor(private readonly db: DatabaseService) {}
+  constructor(
+    private readonly db: DatabaseService,
+    private readonly regionCompat: RegionCompatService
+  ) {}
 
   private async generateProjectCode(client: PoolClient) {
     await this.db.query(
@@ -150,44 +156,41 @@ class ProjectService {
     return result.rows[0].next_code;
   }
 
-  private async ensureBusinessRegionExists(regionId: string, client?: PoolClient) {
-    const result = await this.db.query<{ id: string }>(
+  private async resolveProjectRegion(regionId: string, client?: PoolClient): Promise<ResolvedProjectRegion> {
+    const businessRegionId = await this.regionCompat.resolveBusinessRegionId(regionId, 'region_id', client);
+    const result = await this.db.query<{ id: string; region_code: string | null; administrative_region_code: string | null }>(
       `
-      select id
-      from region
-      where tenant_id = $1 and id = $2 and status = 'active'
+      select
+        r.id,
+        nullif(trim(r.region_code), '') as region_code,
+        rr.code as administrative_region_code
+      from region r
+      left join region_reference rr on rr.code = r.region_code and rr.enabled = true
+      where r.tenant_id = $1 and r.id = $2 and r.status = 'active'
       `,
-      [TENANT_ID, regionId],
+      [TENANT_ID, businessRegionId],
       client
     );
 
-    if (!result.rows[0]) {
+    const row = result.rows[0];
+    if (!row) {
       throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
         fieldErrors: {
           region_id: 'region_id is invalid'
         }
       });
     }
-  }
-
-  private async ensureManualRegionCodeExists(regionCode: string, client?: PoolClient) {
-    const result = await this.db.query<{ code: string }>(
-      `
-      select code
-      from region_reference
-      where code = $1 and enabled = true
-      `,
-      [regionCode],
-      client
-    );
-
-    if (!result.rows[0]) {
+    if (!row.region_code || !row.administrative_region_code) {
       throw appException(HttpStatus.BAD_REQUEST, 'VALIDATION_ERROR', 'Validation failed', {
         fieldErrors: {
-          manual_region_id: 'manual_region_id is invalid'
+          region_id: 'region_id is not linked to an enabled administrative region'
         }
       });
     }
+
+    return {
+      id: row.id
+    };
   }
 
   private async ensureActiveMaintenanceTeamExists(maintenanceTeamId: string, client?: PoolClient) {
@@ -221,9 +224,9 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
-        p.manual_region_id,
-        mrr.name as manual_region_name,
-        mrr.full_path_name as manual_region_full_path_name,
+        rr.code as manual_region_id,
+        rr.name as manual_region_name,
+        rr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status,
@@ -235,7 +238,6 @@ class ProjectService {
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
-      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1
       order by p.created_at asc
@@ -264,16 +266,15 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
-        p.manual_region_id,
-        mrr.name as manual_region_name,
-        mrr.full_path_name as manual_region_full_path_name,
+        rr.code as manual_region_id,
+        rr.name as manual_region_name,
+        rr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
-      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1
       order by p.created_at asc
@@ -293,9 +294,9 @@ class ProjectService {
         p.region_id,
         coalesce(rr.full_path_name, r.region_name) as region_name,
         rr.full_path_name as region_full_path_name,
-        p.manual_region_id,
-        mrr.name as manual_region_name,
-        mrr.full_path_name as manual_region_full_path_name,
+        rr.code as manual_region_id,
+        rr.name as manual_region_name,
+        rr.full_path_name as manual_region_full_path_name,
         p.maintenance_team_id,
         mt.team_name as maintenance_team_name,
         p.status,
@@ -306,7 +307,6 @@ class ProjectService {
       from project p
       join region r on r.id = p.region_id
       left join region_reference rr on rr.code = r.region_code
-      left join region_reference mrr on mrr.code = p.manual_region_id
       left join maintenance_team mt on mt.id = p.maintenance_team_id
       where p.tenant_id = $1 and p.id = $2
       `,
@@ -340,12 +340,8 @@ class ProjectService {
 
     const created = await this.db.withTransaction(async (client) => {
       const resolvedRegionId = dto.region_id!.trim();
-      const resolvedManualRegionId = dto.manual_region_id?.trim() || null;
       const generatedProjectCode = await this.generateProjectCode(client);
-      await this.ensureBusinessRegionExists(resolvedRegionId, client);
-      if (resolvedManualRegionId) {
-        await this.ensureManualRegionCodeExists(resolvedManualRegionId, client);
-      }
+      const resolvedRegion = await this.resolveProjectRegion(resolvedRegionId, client);
       if (dto.maintenance_team_id?.trim()) {
         await this.ensureActiveMaintenanceTeamExists(dto.maintenance_team_id.trim(), client);
       }
@@ -357,22 +353,20 @@ class ProjectService {
           project_code,
           project_name,
           region_id,
-          manual_region_id,
           maintenance_team_id,
           status,
           owner,
           contact_phone,
           operator,
           remarks
-        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+        ) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         returning id
         `,
         [
           TENANT_ID,
           generatedProjectCode,
           dto.project_name!.trim(),
-          resolvedRegionId,
-          resolvedManualRegionId,
+          resolvedRegion.id,
           dto.maintenance_team_id?.trim() || null,
           dto.status ?? 'draft',
           dto.owner!.trim(),
@@ -408,7 +402,6 @@ class ProjectService {
     const existing = await this.getById(id);
     const next = {
       region_id: dto.region_id?.trim() ?? existing.region_id,
-      manual_region_id: dto.manual_region_id === undefined ? existing.manual_region_id : dto.manual_region_id?.trim() || null,
       maintenance_team_id: dto.maintenance_team_id === undefined ? existing.maintenance_team_id : dto.maintenance_team_id?.trim() || null,
       project_name: dto.project_name?.trim() ?? existing.project_name,
       status: dto.status ?? existing.status,
@@ -419,11 +412,7 @@ class ProjectService {
     };
 
     await this.db.withTransaction(async (client) => {
-      const resolvedRegionId = next.region_id;
-      await this.ensureBusinessRegionExists(resolvedRegionId, client);
-      if (next.manual_region_id) {
-        await this.ensureManualRegionCodeExists(next.manual_region_id, client);
-      }
+      const resolvedRegion = await this.resolveProjectRegion(next.region_id, client);
       if (next.maintenance_team_id) {
         await this.ensureActiveMaintenanceTeamExists(next.maintenance_team_id, client);
       }
@@ -434,17 +423,16 @@ class ProjectService {
         set
           project_name = $3,
           region_id = $4,
-          manual_region_id = $5,
-          maintenance_team_id = $6,
-          status = $7,
-          owner = $8,
-          contact_phone = $9,
-          operator = $10,
-          remarks = $11,
+          maintenance_team_id = $5,
+          status = $6,
+          owner = $7,
+          contact_phone = $8,
+          operator = $9,
+          remarks = $10,
           updated_at = now()
         where tenant_id = $1 and id = $2
         `,
-        [TENANT_ID, id, next.project_name, resolvedRegionId, next.manual_region_id, next.maintenance_team_id, next.status, next.owner, next.contact_phone, next.operator, next.remarks],
+        [TENANT_ID, id, next.project_name, resolvedRegion.id, next.maintenance_team_id, next.status, next.owner, next.contact_phone, next.operator, next.remarks],
         client
       );
     });
@@ -551,6 +539,6 @@ class ProjectController {
 
 @Module({
   controllers: [ProjectController],
-  providers: [ProjectService]
+  providers: [ProjectService, RegionCompatService]
 })
 export class ProjectModule {}

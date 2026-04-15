@@ -9,6 +9,7 @@ import {
 } from './device-ledger.dto';
 import { DeviceLedgerRepository } from './device-ledger.repository';
 import { DeviceLedgerService } from './device-ledger.service';
+import { RuntimeIngestModule } from '../runtime-ingest/runtime-ingest.module';
 
 @Controller('devices')
 class DeviceLedgerController {
@@ -22,8 +23,10 @@ class DeviceLedgerController {
       page,
       pageSize,
       projectId: query.project_id,
+      blockId: query.block_id,
       assetId: query.asset_id,
       deviceTypeId: query.device_type_id,
+      displayStatus: query.display_status,
       q: query.q
     });
     return ok({
@@ -62,8 +65,13 @@ class DeviceLedgerController {
   }
 
   @Get(':id/telemetry')
-  telemetry(@Param('id') id: string) {
-    return ok({ id, telemetry: [] });
+  async telemetry(@Param('id') id: string) {
+    return ok(await this.service.getTelemetry(id));
+  }
+
+  @Get(':id/integration-profile')
+  async integrationProfile(@Param('id') id: string) {
+    return ok(await this.service.getIntegrationProfile(id));
   }
 
   @Get(':id')
@@ -88,6 +96,7 @@ class DeviceLedgerController {
 }
 
 @Module({
+  imports: [RuntimeIngestModule],
   controllers: [DeviceLedgerController],
   providers: [DeviceLedgerRepository, DeviceLedgerService],
   exports: [DeviceLedgerRepository, DeviceLedgerService]
