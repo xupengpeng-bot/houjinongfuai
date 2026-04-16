@@ -3,13 +3,13 @@
 Status: bridge
 Audience: PM and all delivery roles
 
-The development-governance docs have been moved out of this business Git repository.
+The development-governance docs are no longer maintained as the primary truth inside this business Git repository.
 
-New location:
+Current workspace location:
 
-- `D:\20251211\zhinengti\development-system\projects\houjinongfuai\docs\governance`
+- `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai\docs\governance`
 
-Use that sibling development-system directory for:
+Use that project development-system directory for:
 
 - protocol rules
 - delivery workflow

@@ -3,17 +3,17 @@
 Status: bridge
 Audience: PM, software engineer, Cursor, Codex
 
-The software-engineer development-system docs have been moved out of this business Git repository.
+The software-engineer development-system docs are no longer maintained as the primary truth inside this business Git repository.
 
-New location:
+Current workspace location:
 
-- `D:\20251211\zhinengti\development-system\projects\houjinongfuai\docs\codex`
+- `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai\docs\codex`
 
 Bootstrap helper kept in this repository:
 
-- `D:\20251211\zhinengti\houjinongfuai\docs\codex\MAIN-CODEX-BOOTSTRAP.md`
+- `D:\Develop\houji\houjinongfuAI-Cursor\houjinongfuai-working\docs\codex\MAIN-CODEX-BOOTSTRAP.md`
 
-Use that sibling development-system directory for:
+Use that project development-system directory for:
 
 - onboarding
 - current task dispatch

@@ -1,4 +1,4 @@
-﻿# Project Docs Map
+# Project Docs Map
 
 Status: active
 Audience: PM, Codex, Lovable, embedded, hardware, QA
@@ -8,7 +8,7 @@ Purpose: separate business requirements from development-system execution docs a
 
 1. `AGENTS.md`
 2. `docs/requirements/README.md`
-3. `docs/绯荤粺璇存槑/README.md`
+3. `docs/系统说明/README.md`
 4. `docs/p1/README.md`
 5. `docs/protocol/device-protocol-v1.md`
 6. `docs/protocol/device-event-model-v1.md`
@@ -30,18 +30,22 @@ Purpose: separate business requirements from development-system execution docs a
 22. `docs/uat/README.md`
 23. `docs/lovable/README.md`
 
-## Development-system entry
+## Development-System Entry
 
-AI task dispatch, onboarding, execution modes, and workflow governance have been moved out of this business repository.
+AI task dispatch, onboarding, execution modes, and workflow governance for the current workspace are maintained here:
 
-Use this external workspace:
+- `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai`
 
-- `D:\20251211\zhinengti\development-system\projects\houjinongfuai`
+Shared reusable development-system rules for the current workspace are maintained here:
 
-Read there when you need:
+- `D:\Develop\houji\houjinongfuAI-Cursor\hartware\shared`
 
-- `CURRENT.md`
-- `RESULT.md`
+Read the project development-system folder when you need:
+
+- `docs/codex/README.md`
+- `docs/codex/CURRENT.md`
+- `docs/codex/RESULT.md`
+- `docs/governance/README.md`
 - work modes
 - task types
 - dispatch protocol
@@ -51,50 +55,49 @@ Read there when you need:
 
 - `docs/requirements`
   - human-facing requirement entry and reading order.
-- `docs/绯荤粺璇存槑`
+- `docs/系统说明`
   - current formal business requirement truth and product rules.
-
 - `docs/p1`
   - Phase 1 scope, model, state, API, schema, and module baseline.
 - `docs/protocol`
-  - Device protocol, event model, and settlement rules.
+  - device protocol, event model, settlement rules, and embedded-controller specification set.
 - `docs/uat`
-  - Current domain freeze, compatibility mapping, contract checklist, UAT plan, and active Codex/Lovable sync.
+  - current domain freeze, compatibility mapping, contract checklist, UAT plan, and active Codex/Lovable sync.
 - `docs/lovable`
-  - Active frontend integration notes only.
+  - active frontend integration notes only.
 - `docs/codex-dispatch/`
-  - 宓屽叆寮?/ 纭欢 / 鍓嶇鍗忎綔娲惧崟鐩綍锛坄embeddedcomhis`銆乣hardwarecomhis`銆乣lovablecomhis`锛夛紝宸蹭粠浠撳簱鏍硅縼鍏ワ紝瑙?`docs/codex-dispatch/README.md`銆?
-- `docs/闄勫睘椤圭洰-waterflow-control.md`
-  - 鐏屾簤璋冨害/绠＄綉閰嶇疆鍓嶇 Demo锛坄waterflow-control`锛夌殑 **Git 鍦板潃銆佹帹鑽愬厠闅嗚矾寰勩€佺鍙ｄ笌渚濊禆鎽樿**锛涗笌涓诲伐绋嬪苟鍒楁椂寤鸿鏀惧湪 `houjinongfuAI-Cursor\waterflow-control`銆?
+  - embedded / hardware / frontend coordination folders (`embeddedcomhis`, `hardwarecomhis`, `lovablecomhis`) moved from the repository root. See `docs/codex-dispatch/README.md`.
+- `docs/附属项目-waterflow-control.md`
+  - sidecar `waterflow-control` demo summary, including Git location, recommended clone path, ports, and dependency notes for this workspace.
 - `docs/devtools`
-  - bridge only; shared development-system rules now live in `D:\20251211\zhinengti\development-system\shared`.
+  - bridge only; active shared development-system tooling notes now live in `D:\Develop\houji\houjinongfuAI-Cursor\hartware\shared`.
 - `docs/governance`
-  - bridge only; the active development-governance docs now live in the external development-system workspace.
+  - bridge only; active project-governance docs now also exist in `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai\docs\governance`.
 - `docs/codex`
-  - bridge only; the active AI task-dispatch docs now live in the external development-system workspace.
+  - bridge only; active AI task-dispatch docs now also exist in `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai\docs\codex`.
 
 ## Historical folders
 
 - `docs/archive`
-  - Historical task sheets, prototype maps, exploratory CRUD references, and superseded contract notes.
+  - historical task sheets, prototype maps, exploratory CRUD references, and superseded contract notes.
 
 ## Document rules
 
 - A document in `docs/archive` is not a live source of truth.
 - Prototype docs must not be used as runtime API truth.
 - If an active doc conflicts with an archived doc, the active doc wins.
-- If two active business docs conflict, follow `AGENTS.md`, then `docs/绯荤粺璇存槑`, then `docs/p1`, then `docs/uat/frontend-backend-contract-checklist-v1.md`, then `docs/uat/lovable-codex-sync.md`.
+- If two active business docs conflict, follow `AGENTS.md`, then `docs/系统说明`, then `docs/p1`, then `docs/uat/frontend-backend-contract-checklist-v1.md`, then `docs/uat/lovable-codex-sync.md`.
 
 ## Requirement vs task rule
 
 - Business requirements are for humans.
   - They describe overall goals, scope, functional points, object relationships, and acceptance expectations.
 - AI task instructions are for execution.
-  - They live in the external development-system workspace.
+  - They live in the project development-system folder.
 - The correct order is:
   1. confirm or update business requirements in this repository
   2. freeze the requirement scope
-  3. decompose the confirmed scope into typed AI tasks in the development-system workspace
+  3. decompose the confirmed scope into typed AI tasks in the project development-system folder
   4. execute and verify
 
 Do not use AI task sheets as a replacement for business requirement documentation.
@@ -119,5 +122,3 @@ Rule:
 - `region_reference` is foundational reference data and must survive cleanup.
 - business `region`, `project`, `asset`, `device`, runtime, order, and UAT rows must not be written by default startup.
 - `db:seed:baseline`, `db:seed:demo`, and `db:seed:test` now all rebuild the nationwide `region_reference` library first instead of falling back to the old sample slice.
-
-

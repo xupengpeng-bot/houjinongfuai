@@ -9,8 +9,8 @@
 
 - 本目录是“给人看的业务需求与产品规则”
 - 本目录不承载 AI 派单文件、CURRENT/RESULT、执行状态或任务回写
-- AI 任务指令在开发体系目录维护：
-  - `D:\20251211\zhinengti\development-system\projects\houjinongfuai`
+- AI 任务指令在当前工作区的项目开发体系目录维护：
+  - `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai`
 
 ## 附属 Demo（调度/配置雏形）
 
@@ -18,11 +18,11 @@
 
 ## 当前正式文档
 
-- [系统业务总览简版](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统业务总览简版.md)
-- [系统整体业务需求](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统整体业务需求.md)
-- [需求拆解](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/需求拆解.md)
-- [骨架冻结与开发分期](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/骨架冻结与开发分期.md)
-- [通用产品规则](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/通用产品规则.md)
+- [系统业务总览简版](./系统业务总览简版.md)
+- [系统整体业务需求](./系统整体业务需求.md)
+- [需求拆解](./需求拆解.md)
+- [骨架冻结与开发分期](./骨架冻结与开发分期.md)
+- [通用产品规则](./通用产品规则.md)
 
 ## 使用规则
 
@@ -41,8 +41,8 @@
 
 ## 当前推荐阅读顺序
 
-1. [系统业务总览简版](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统业务总览简版.md)
-2. [系统整体业务需求](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/系统整体业务需求.md)
-3. [骨架冻结与开发分期](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/骨架冻结与开发分期.md)
-4. [需求拆解](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/需求拆解.md)
-5. [通用产品规则](D:/20251211/zhinengti/houjinongfuai/docs/系统说明/通用产品规则.md)
+1. [系统业务总览简版](./系统业务总览简版.md)
+2. [系统整体业务需求](./系统整体业务需求.md)
+3. [骨架冻结与开发分期](./骨架冻结与开发分期.md)
+4. [需求拆解](./需求拆解.md)
+5. [通用产品规则](./通用产品规则.md)

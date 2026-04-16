@@ -51,16 +51,18 @@ The new machine must bootstrap from Git first.
 
 Known remotes:
 
-- business repository:
+- backend repository:
   - `https://github.com/xupengpeng-bot/houjinongfuai.git`
-- development-system repository:
-  - `https://github.com/xupengpeng-bot/development-system.git`
-
-Frontend repository:
-
-- if frontend work is required, the main Codex must ask PM for the frontend Git remote if it is not already known on that machine
-- frontend local folder name should stay:
-  - `lovable`
+  - local folder name: `houjinongfuai-working`
+- embedded repository:
+  - `https://github.com/xupengpeng-bot/hartware.git`
+  - local folder name: `hartware`
+- frontend repository:
+  - `https://github.com/xupengpeng-bot/git-connect-9d2f5334.git`
+  - local folder name: `lovable-working`
+- optional sidecar repository:
+  - `https://github.com/xupengpeng-bot/waterflow-control.git`
+  - local folder name: `waterflow-control`
 
 ## Workspace rule
 
@@ -74,10 +76,10 @@ $env:WORKSPACE_ROOT = 'D:\work\zhinengti'
 
 Then derive:
 
-- `BUSINESS_REPO_ROOT = <WORKSPACE_ROOT>\houjinongfuai`
-- `DEVSYSTEM_REPO_ROOT = <WORKSPACE_ROOT>\development-system`
-- `PROJECT_DEV_ROOT = <DEVSYSTEM_REPO_ROOT>\projects\houjinongfuai`
-- `FRONTEND_REPO_ROOT = <WORKSPACE_ROOT>\lovable`
+- `BUSINESS_REPO_ROOT = <WORKSPACE_ROOT>\houjinongfuai-working`
+- `EMBEDDED_REPO_ROOT = <WORKSPACE_ROOT>\hartware`
+- `PROJECT_DEV_ROOT = <EMBEDDED_REPO_ROOT>\projects\houjinongfuai`
+- `FRONTEND_REPO_ROOT = <WORKSPACE_ROOT>\lovable-working`
 
 ## Startup order
 
@@ -85,8 +87,8 @@ The main Codex must follow this order:
 
 1. choose `WORKSPACE_ROOT`
 2. clone missing Git repositories
-3. sync them to latest `main`
-4. run development-system preflight
+3. sync them to the active workspace branches
+4. run workspace preflight from `PROJECT_DEV_ROOT`
 5. read dispatch bootstrap when DB-backed dispatch is enabled
 6. then enter the role-specific read chain
 
@@ -103,50 +105,50 @@ Set-Location $env:WORKSPACE_ROOT
 ### 2. Clone required repositories
 
 ```powershell
-git clone https://github.com/xupengpeng-bot/development-system.git
-git clone https://github.com/xupengpeng-bot/houjinongfuai.git
+git clone https://github.com/xupengpeng-bot/houjinongfuai.git houjinongfuai-working
+git clone https://github.com/xupengpeng-bot/hartware.git
+git clone https://github.com/xupengpeng-bot/git-connect-9d2f5334.git lovable-working
 ```
 
-If frontend work is required:
+If the sidecar demo is required:
 
-- ask PM for the frontend Git remote if missing
-- clone it into `<WORKSPACE_ROOT>\lovable`
+- run `git clone https://github.com/xupengpeng-bot/waterflow-control.git`
 
-### 3. Sync to latest `main`
+### 3. Sync to the active workspace branches
 
 ```powershell
-git -C "$env:WORKSPACE_ROOT\development-system" fetch --all --prune
-git -C "$env:WORKSPACE_ROOT\development-system" checkout main
-git -C "$env:WORKSPACE_ROOT\development-system" pull --ff-only origin main
+git -C "$env:WORKSPACE_ROOT\houjinongfuai-working" fetch --all --prune
+git -C "$env:WORKSPACE_ROOT\houjinongfuai-working" checkout main
+git -C "$env:WORKSPACE_ROOT\houjinongfuai-working" pull --ff-only origin main
 
-git -C "$env:WORKSPACE_ROOT\houjinongfuai" fetch --all --prune
-git -C "$env:WORKSPACE_ROOT\houjinongfuai" checkout main
-git -C "$env:WORKSPACE_ROOT\houjinongfuai" pull --ff-only origin main
+git -C "$env:WORKSPACE_ROOT\hartware" fetch --all --prune
+git -C "$env:WORKSPACE_ROOT\hartware" checkout codex/init-stable-20260409
+git -C "$env:WORKSPACE_ROOT\hartware" pull --ff-only origin codex/init-stable-20260409
 ```
 
 If the frontend repo exists:
 
 ```powershell
-git -C "$env:WORKSPACE_ROOT\lovable" fetch --all --prune
-git -C "$env:WORKSPACE_ROOT\lovable" checkout main
-git -C "$env:WORKSPACE_ROOT\lovable" pull --ff-only origin main
+git -C "$env:WORKSPACE_ROOT\lovable-working" fetch --all --prune
+git -C "$env:WORKSPACE_ROOT\lovable-working" checkout main
+git -C "$env:WORKSPACE_ROOT\lovable-working" pull --ff-only origin main
 ```
 
 ### 4. Run preflight
 
 ```powershell
-Set-Location "$env:WORKSPACE_ROOT\development-system\projects\houjinongfuai"
-.\tools\preflight.ps1 -BusinessRoot "$env:WORKSPACE_ROOT\houjinongfuai" -FrontendRoot "$env:WORKSPACE_ROOT\lovable"
+Set-Location "$env:WORKSPACE_ROOT\hartware\projects\houjinongfuai"
+.\tools\preflight.ps1 -BusinessRoot "$env:WORKSPACE_ROOT\houjinongfuai-working" -FrontendRoot "$env:WORKSPACE_ROOT\lovable-working"
 ```
 
 ### 5. Read dispatch bootstrap when enabled
 
 ```powershell
-Set-Location "$env:WORKSPACE_ROOT\houjinongfuai\backend"
+Set-Location "$env:WORKSPACE_ROOT\houjinongfuai-working\backend"
 python .\scripts\dispatch_bootstrap_fetch.py --team software_engineer
 ```
 
-If dispatch DB is not enabled yet, continue with file-based bootstrap from development-system.
+If dispatch DB is not enabled yet, continue with file-based bootstrap from `<PROJECT_DEV_ROOT>`.
 
 ## Live read chain after bootstrap
 
@@ -259,9 +261,10 @@ Do not start coding immediately. Complete Git bootstrap first, then move into re
 Execution rules:
 1. Use the current machine's WORKSPACE_ROOT. Do not assume the old machine path exists.
 2. If local repositories do not exist yet, fetch them from:
-   - development-system: https://github.com/xupengpeng-bot/development-system.git
    - houjinongfuai: https://github.com/xupengpeng-bot/houjinongfuai.git
-3. If frontend work is required and the frontend remote is unknown, ask PM for the lovable Git remote first.
+   - hartware: https://github.com/xupengpeng-bot/hartware.git
+   - lovable-working: https://github.com/xupengpeng-bot/git-connect-9d2f5334.git
+3. If the sidecar demo is required, also fetch https://github.com/xupengpeng-bot/waterflow-control.git.
 4. After Git sync completes, run preflight.
 5. Then read files in the order defined by MAIN-CODEX-BOOTSTRAP.md.
 6. If PM gives a fuzzy requirement, output a requirement understanding package first. Do not code yet.
