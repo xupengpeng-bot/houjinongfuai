@@ -12,9 +12,10 @@
 - AI 任务指令在当前工作区的项目开发体系目录维护：
   - `D:\Develop\houji\houjinongfuAI-Cursor\hartware\projects\houjinongfuai`
 
-## 附属 Demo（调度/配置雏形）
+## 管网 / 调度原型（主前端内）
 
-- [waterflow-control 仓库与本地运行配置](../附属项目-waterflow-control.md)（Git 路径、`npm run dev` 端口 8080、路由 `/` 与 `/workbench` 等固化备忘）
+- 当前实现：`lovable-working/src/features/waterflow/README.md`（运营后台 `/ops` 下相关路由）。
+- 历史上独立 sidecar 仓库备忘（归档）：[附属项目-waterflow-control.md](../附属项目-waterflow-control.md)
 
 ## 当前正式文档
 

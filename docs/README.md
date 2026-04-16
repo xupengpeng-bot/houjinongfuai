@@ -68,7 +68,7 @@ Read the project development-system folder when you need:
 - `docs/codex-dispatch/`
   - embedded / hardware / frontend coordination folders (`embeddedcomhis`, `hardwarecomhis`, `lovablecomhis`) moved from the repository root. See `docs/codex-dispatch/README.md`.
 - `docs/附属项目-waterflow-control.md`
-  - sidecar `waterflow-control` demo summary, including Git location, recommended clone path, ports, and dependency notes for this workspace.
+  - archived notes for the former standalone `waterflow-control` demo; active UI lives in `lovable-working/src/features/waterflow/`.
 - `docs/devtools`
   - bridge only; active shared development-system tooling notes now live in `D:\Develop\houji\houjinongfuAI-Cursor\hartware\shared`.
 - `docs/governance`

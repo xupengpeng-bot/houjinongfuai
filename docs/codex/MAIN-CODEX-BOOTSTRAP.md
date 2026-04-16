@@ -60,9 +60,9 @@ Known remotes:
 - frontend repository:
   - `https://github.com/xupengpeng-bot/git-connect-9d2f5334.git`
   - local folder name: `lovable-working`
-- optional sidecar repository:
+- optional sidecar repository (archived for the default workspace layout; do not assume it exists under `WORKSPACE_ROOT`):
   - `https://github.com/xupengpeng-bot/waterflow-control.git`
-  - local folder name: `waterflow-control`
+  - historical local folder name: `waterflow-control` (removed from `houjinongfuAI-Cursor` root in 2026-04-16; prototypes live in `lovable-working/src/features/waterflow/`)
 
 ## Workspace rule
 
@@ -110,9 +110,7 @@ git clone https://github.com/xupengpeng-bot/hartware.git
 git clone https://github.com/xupengpeng-bot/git-connect-9d2f5334.git lovable-working
 ```
 
-If the sidecar demo is required:
-
-- run `git clone https://github.com/xupengpeng-bot/waterflow-control.git`
+If you still need the standalone sidecar for archaeology, clone it outside the default three-repo layout (see `docs/附属项目-waterflow-control.md`).
 
 ### 3. Sync to the active workspace branches
 
@@ -264,7 +262,7 @@ Execution rules:
    - houjinongfuai: https://github.com/xupengpeng-bot/houjinongfuai.git
    - hartware: https://github.com/xupengpeng-bot/hartware.git
    - lovable-working: https://github.com/xupengpeng-bot/git-connect-9d2f5334.git
-3. If the sidecar demo is required, also fetch https://github.com/xupengpeng-bot/waterflow-control.git.
+3. Optional: only if you explicitly need the archived sidecar repo, also fetch https://github.com/xupengpeng-bot/waterflow-control.git (not part of the default workspace root set).
 4. After Git sync completes, run preflight.
 5. Then read files in the order defined by MAIN-CODEX-BOOTSTRAP.md.
 6. If PM gives a fuzzy requirement, output a requirement understanding package first. Do not code yet.

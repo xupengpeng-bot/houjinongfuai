@@ -1,21 +1,21 @@
-# waterflow-control：仓库位置与本地配置（固化备忘）
+# waterflow-control：仓库位置与本地配置（归档）
 
-状态：active  
-用途：记录 **农用灌溉调度/管网配置前端 Demo** 的 Git 地址、推荐目录、运行参数与技术栈摘要，避免后续换机器或 Agent 环境时反复核对。  
-说明：**本文档不替代** 主仓库 `docs/系统说明` 中的业务真值；Demo 仅作产品与技术参考。
+状态：**archived（2026-04-16）** — 独立 sidecar 目录已从 `D:\Develop\houji\houjinongfuAI-Cursor` 工作区根 **删除**；评审用 `tmp-hw-review/` 亦已删除。  
+当前管网/调度原型以主前端为准：`lovable-working/src/features/waterflow/`（见该目录 `README.md`）。  
+下文保留 **历史** Git 地址与命令，仅供考古或仍需单独 clone 时使用；**业务与契约** 仍以 `docs/系统说明` 与后端 OpenAPI 为准。
 
 ---
 
-## 1. Git 远程与目录约定
+## 1. Git 远程与目录约定（历史）
 
 | 项 | 值 |
 |----|-----|
-| **HTTPS（当前本地 clone 的 `origin`）** | `https://github.com/xupengpeng-bot/waterflow-control.git` |
+| **HTTPS（历史 `origin`）** | `https://github.com/xupengpeng-bot/waterflow-control.git` |
 | **SSH（等价）** | `git@github.com:xupengpeng-bot/waterflow-control.git` |
-| **与主工程 Cursor workspace 并列的推荐克隆路径** | `D:\Develop\houji\houjinongfuAI-Cursor\waterflow-control` |
-| **现有本地副本（开发常用）** | `D:\Develop\houji\waterflow-control` |
+| **曾在工作区根使用的路径（已移除）** | `D:\Develop\houji\houjinongfuAI-Cursor\waterflow-control` |
+| **平级副本（若仍存在，仅参考）** | `D:\Develop\houji\waterflow-control` |
 
-建议在 **新环境** 将仓库克隆到 **`houjinongfuAI-Cursor` 同级** 的 `waterflow-control`，与业务主仓同一工作区根下，便于联调与文档交叉引用。若继续使用 `D:\Develop\houji\waterflow-control`，只需在 IDE 中多根目录加入该路径即可。
+若仍需对照旧 Demo，可在任意根目录自行 `git clone` 到非工作区路径；**不要**再假设上述「工作区根」路径一定存在。
 
 ### 克隆示例（PowerShell）
 
@@ -124,12 +124,13 @@ git clone git@github.com:xupengpeng-bot/waterflow-control.git waterflow-control
 
 ## 11. 与主前端合并（lovable-working）
 
-演示代码已并入 **`lovable-working`**，路径：`src/features/waterflow/`。管理后台路由见该目录下 `README.md`（如 `/ops/network-simulator`、`/ops/network-workbench`）。  
-独立仓库 `waterflow-control` 仍可保留作对照或上游同步；以主前端内副本为后续迭代基线。
+演示代码已并入 **`lovable-working`**，路径：`src/features/waterflow/`。管理后台路由见该目录下 `README.md`（如 `/ops/network-workbench`）。  
+后续迭代 **只以主前端内副本为基线**；独立 `waterflow-control` 仓库不再作为工作区默认依赖。
 
 ## 12. 变更记录
 
 | 日期 | 说明 |
 |------|------|
+| 2026-04-16 | 工作区根删除 `waterflow-control/`、`tmp-hw-review/`；本文档改为归档；活跃实现见 `lovable-working/src/features/waterflow/`。 |
 | 2026-03-30 | 根据 `D:\Develop\houji\waterflow-control` 当前副本与 `.git/config` 固化路径与配置摘要；未修改 Demo 仓库内任何文件。 |
 | 2026-03-30 | 已拉取 `main` 至 **d44bb9a** 并合并进 `lovable-working/src/features/waterflow`（含区块检测、`useProjectStore` 等）。 |
